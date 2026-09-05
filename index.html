@@ -7,7 +7,7 @@
     <title>SpliceECGenio - Explorador Genómico de Exones, Intrones y Consecuencias de Variantes</title>
     <meta name="description"
         content="Herramienta bioinformática para descargar la estructura genómica completa (exones e intrones) desde Ensembl y visualizar variantes genómicas a nivel macro y micro.">
-    <link rel="stylesheet" href="css/app.css">
+    <link rel="stylesheet" href="css/app.css?v=3">
 </head>
 
 <body>
@@ -18,20 +18,20 @@
             <div class="brand-section">
                 <div class="brand-logo">🧬</div>
                 <div class="brand-titles">
-                    <h1>SpliceECGenio <span style="font-size: 0.9rem; font-weight: 400; opacity: 0.8;">| Genomic
-                            VariantStudio</span></h1>
-                    <p>Descarga automática de estructura de exones/intrones, visor de bases y simulador de marco de
-                        lectura</p>
+                    <h1>SpliceECGenio <span style="font-size: 0.9rem; font-weight: 400; opacity: 0.8;">| Genomic VariantStudio</span></h1>
+                    <p>Carga de estructura de exones/intrones, visor de bases a nivel de empalme y oráculo predictivo</p>
                 </div>
             </div>
             <div class="header-actions">
-                <button id="downloadFastaBtn" class="btn-secondary"
-                    title="Descargar secuencia genómica FASTA completa">💾 Descargar FASTA</button>
+                <button id="aboutBtn" class="btn-secondary" onclick="window.openAboutModal ? window.openAboutModal() : document.getElementById('aboutModal').showModal()" title="Acerca de este asistente y contacto">ℹ️ Acerca de</button>
                 <button id="themeToggleBtn" class="btn-secondary" title="Cambiar tema claro/oscuro">🌓 Tema</button>
-                <button id="exportReportBtn" class="btn-secondary" title="Imprimir / Exportar reporte">📄
-                    Exportar</button>
             </div>
         </header>
+
+        <!-- Intro Corta -->
+        <div class="app-intro-banner">
+            <p><strong>Plataforma pedagógica para el análisis molecular de variantes de splicing.</strong> Modela la estructura exón-intrón en coordenadas GRCh38, visualiza uniones canónicas a resolución nucleotídica y simula el impacto en el marco de lectura del ARNm.</p>
+        </div>
 
         <!-- Step 1 & Step 2 Input Section -->
         <section class="query-grid">
@@ -41,8 +41,7 @@
                     <label for="variantInput" class="input-label"
                         style="display: flex; flex-direction: column; gap: 2px;">
                         <span><span class="step-badge">Paso 1</span> Variante Genómica</span>
-                        <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600;">(Chr:Pos
-                            Ref&gt;Alt)</span>
+                        <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600;">(Chr:Pos Ref&gt;Alt)</span>
                     </label>
                     <span class="input-subtext">Coordenada genómica exacta (GRCh38)</span>
                 </div>
@@ -61,7 +60,7 @@
                 </div>
                 <div style="display: flex; gap: 8px; margin-top: 4px;">
                     <input type="text" id="transcriptInput" class="input-field" placeholder="ej. NM_000344.4 (Opcional)"
-                        value="NM_000344.4" style="flex: 1.5;">
+                        value="NM_004946.3" style="flex: 1.5;">
                     <select id="variantTypeSelect" class="input-field" style="flex: 1; cursor: pointer;">
                         <option value="auto">Auto-detectar tipo</option>
                         <option value="splicing">Splicing</option>
@@ -74,15 +73,21 @@
 
             <div style="display: flex; gap: 10px; align-items: flex-end;">
                 <button id="calculateBtn" class="btn-primary" style="height: 52px; width: 100%;">
-                    <span>⚡ Descargar y Visualizar</span>
+                    <span>⚡ Cargar y Visualizar</span>
                 </button>
             </div>
         </section>
 
+        <!-- Validation Error Alert Box -->
+        <div id="validationErrorBox" class="validation-error-box" style="display: none;">
+            <span class="error-icon">⚠️</span>
+            <span id="validationErrorText">Formato de variante inválido o base incorrecta.</span>
+        </div>
+
         <!-- Collapsible Examples Section below Steps 1 and 2 -->
         <div class="preset-collapsible-wrapper">
             <button id="togglePresetsBtn" class="btn-toggle-presets">
-                <span>💡 Ejemplos Reales (DOCK2, ABCA3, Inserciones, Deleciones, Chr 8, 6, 1)</span>
+                <span>💡 Ejemplos Clínicos (DOCK2, ABCA3, Inserciones, Deleciones, Chr 8, 6, 1)</span>
                 <span id="presetsArrow" style="font-size: 1.1rem;">▾</span>
             </button>
             <div class="preset-pills" id="presetPills" style="display: none; margin-top: 10px;">
@@ -95,16 +100,13 @@
                     data-transcript="">chr8-140300616-T-G</button>
                 <button class="preset-pill" data-variant="6 31740453 G T" data-transcript="">6 31740453 G T</button>
                 <button class="preset-pill" data-variant="1:930130:C:G" data-transcript="">1:930130:C:G</button>
-                <button class="preset-pill" data-variant="1-1042601-A-AGAGAG" data-transcript="">1-1042601-A-AGAGAG (Ins
-                    GAGAG)</button>
-                <button class="preset-pill" data-variant="1-1042466-GGGC-G" data-transcript="">1-1042466-GGGC-G (Del
-                    GGC)</button>
-                <button class="preset-pill" data-variant="7:93134264 CT > C" data-transcript="">7:93134264 CT > C (Del
-                    T)</button>
+                <button class="preset-pill" data-variant="1-1042601-A-AGAGAG" data-transcript="">1-1042601-A-AGAGAG (Ins GAGAG)</button>
+                <button class="preset-pill" data-variant="1-1042466-GGGC-G" data-transcript="">1-1042466-GGGC-G (Del GGC)</button>
+                <button class="preset-pill" data-variant="7:93134264 CT > C" data-transcript="">7:93134264 CT > C (Del T)</button>
             </div>
         </div>
 
-        <!-- Live Status Bar for Ensembl Download -->
+        <!-- Live Status Bar for Ensembl Fetch -->
         <div id="downloadStatusBox" class="nmd-decision-box"
             style="display: none; padding: 14px 20px; margin-bottom: 24px;">
             <div class="nmd-title">
@@ -122,9 +124,9 @@
                         <div class="card-icon">🗺️</div>
                         <div>
                             <h3 class="card-title" id="geneTitleDisplay">
-                                <span class="step-badge">Paso 3</span> Mapa General de Exones e Intrones
+                                <span class="step-badge">Paso 3</span> Mapa de Exones e Intrones
                             </h3>
-                            <p class="input-subtext" id="geneSubDetailsDisplay">Cargando estructura genómica...</p>
+                            <p class="input-subtext" id="geneSubDetailsDisplay">Distribución genómica del transcripto.</p>
                         </div>
                     </div>
                     <div id="variantBadgeTop">
@@ -147,8 +149,7 @@
                             <h2 class="card-title">
                                 <span class="step-badge">Paso 4</span> Visor a Nivel de Bases y Splicing
                             </h2>
-                            <p class="input-subtext">Regla genómica, pista de aminoácidos en chevrons, intrones
-                                (—►—►—►—), unión de splicing con líneas cian y marcador de la variante</p>
+                            <p class="input-subtext">Regla genómica, pista de aminoácidos, uniones canónicas y marcador de variante.</p>
                         </div>
                     </div>
                 </div>
@@ -175,7 +176,7 @@
 
                 <div class="metrics-grid">
                     <div class="metric-card">
-                        <span class="metric-label">Tipo de Variante Interpretado</span>
+                        <span class="metric-label">Tipo de Variante</span>
                         <span class="metric-value highlight" id="variantTypeVal">Splicing</span>
                         <span class="metric-sub" id="variantTypeSub">Deducción automática</span>
                     </div>
@@ -199,7 +200,7 @@
                 <!-- Functional Description Box -->
                 <div class="nmd-decision-box" style="margin-top: 16px;">
                     <div class="nmd-title">
-                        <span>📝 Consecuencia Molecular e Impacto Esperado:</span>
+                        <span>Consecuencia Molecular Esperada:</span>
                     </div>
                     <p class="nmd-description" id="consequenceDescText">
                         Cargando análisis...
@@ -207,23 +208,74 @@
                 </div>
             </div>
 
-            <!-- Step 6: Interactive Consequence & Reading Frame Simulator -->
+            <!-- Step 6: Interactive Consequence & Reading Frame Simulator (Includes SpliceAI Oracle) -->
             <div id="consequenceSimContainer">
                 <!-- Rendered dynamically for Splicing / Frameshift -->
             </div>
 
         </main>
 
-        <!-- Footer -->
+        <!-- Permanent Clinical Disclaimer Footer -->
         <footer class="app-footer">
-            <p><strong>NonTool Genomic VariantStudio</strong> &bull; Conexión directa con Ensembl REST API y modelado de
-                marco de lectura</p>
+            <div class="footer-disclaimer-box">
+                <p class="footer-disclaimer-text">
+                    ⚠️ <strong>Aviso Importante:</strong> Este asistente es una herramienta educativa de apoyo y no reemplaza el criterio clínico. No cuenta con validación clínica para diagnóstico. Toda clasificación debe ser validada por un profesional habilitado.
+                </p>
+            </div>
+            <div class="footer-meta">
+                <p><strong>SpliceECGenio &bull; Genomic VariantStudio</strong> &bull; Desarrollado para la <strong>Escuela de Genómica Clínica (EGC)</strong></p>
+            </div>
         </footer>
-
     </div>
 
+    <!-- Pop-up Modal Acerca de (Diálogo nativo con overlay centrado) -->
+    <dialog id="aboutModal" class="about-dialog" onclick="if(event.target===this)window.closeAboutModal ? window.closeAboutModal() : this.close()">
+        <div class="modal-card" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3 style="font-family: var(--font-heading); font-size: 1.15rem; font-weight: 700; color: var(--text-primary); margin: 0;">Acerca de SpliceECGenio</h3>
+                <button id="closeAboutModalBtn" class="modal-close-btn" onclick="window.closeAboutModal ? window.closeAboutModal() : document.getElementById('aboutModal').close()" title="Cerrar">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="about-lead-text">
+                    ¡Hola! Soy tu asistente especializado en variantes de splicing.<br>
+                    Fui desarrollado para apoyar el aprendizaje y la práctica en genómica clínica.
+                </p>
+
+                <div class="about-section-card">
+                    <h4>Quiénes somos</h4>
+                    <p>
+                        Desarrollado por <strong>Lorenzo Erra</strong> — Bioinformático / Genómico Clínico, como recurso educativo de la <strong>Escuela de Genómica Clínica (EGC)</strong> en conjunto con los docentes, un espacio de formación avanzada en genómica, bioinformática y medicina de precisión.
+                    </p>
+                    <p style="margin-top: 10px; margin-bottom: 0;">
+                        <a href="https://genomicaclinica.com/" target="_blank" rel="noopener noreferrer" class="egc-link">
+                            🔗 Link a los cursos: Escuela de Genómica Clínica (EGC)
+                        </a>
+                    </p>
+                </div>
+
+                <div class="about-section-card">
+                    <h4>Feedback & Contacto</h4>
+                    <p>
+                        ¿Encontraste un error, tenés una sugerencia o querés colaborar con el proyecto? Tu feedback ayuda a mejorar la herramienta para toda la comunidad.
+                    </p>
+                    <div class="about-actions-row">
+                        <a href="mailto:lorenzoerra@gmail.com?subject=Feedback%20SpliceECGenio" class="btn-primary" style="text-decoration: none; padding: 9px 18px; font-size: 0.88rem; display: inline-flex; align-items: center; gap: 6px;">
+                            ✉️ Enviar Feedback
+                        </a>
+                        <button id="copyAliasMpBtn" class="btn-secondary" style="padding: 9px 18px; font-size: 0.88rem; display: inline-flex; align-items: center; gap: 6px;">
+                            ☕ Copiar Alias MP ☕
+                        </button>
+                    </div>
+                    <div id="copyAliasSuccessMsg" class="copy-success-badge" style="display: none;">
+                        ✅ ¡Alias copiado al portapapeles!
+                    </div>
+                </div>
+            </div>
+        </div>
+    </dialog>
+
     <!-- Scripts -->
-    <script type="module" src="js/app.js"></script>
+    <script type="module" src="js/app.js?v=3"></script>
 </body>
 
 </html>

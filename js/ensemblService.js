@@ -200,6 +200,86 @@ export function parseGenomicInput(inputStr, transcriptOpt = null, typeOpt = null
 }
 
 /**
+ * Validates genomic variant input format and nucleotide bases strictly
+ * Ensures valid GRCh38 chromosome, positive position, and standard IUPAC nucleotides (A, C, G, T)
+ */
+export function validateGenomicInput(inputStr) {
+    if (!inputStr || typeof inputStr !== 'string' || !inputStr.trim()) {
+        return { valid: false, error: "Por favor ingresa una variante genómica (ej. 5:169670598 G>A o 8:140300616 T>G)." };
+    }
+    const clean = inputStr.trim();
+
+    // Check if it matches known clinical patterns
+    const hyphenMatch = clean.match(/^(?:chr)?([0-9a-zA-Z]+)-(\d+)-([a-zA-Z]+)-([a-zA-Z]+)/i);
+    const colon4Match = clean.match(/^(?:chr)?([0-9a-zA-Z]+):(\d+):([a-zA-Z]+):([a-zA-Z]+)/i);
+    const space4Match = clean.match(/^(?:chr)?([0-9a-zA-Z]+)\s+(\d+)\s+([a-zA-Z]+)\s+([a-zA-Z]+)/i);
+    const standardMatch = clean.match(/^(?:chr)?([0-9a-zA-Z]+):(\d+)[\s:_]*(?:([a-zA-Z]+)\s*(?:>|->)\s*([a-zA-Z]+)|([a-zA-Z]+)\s+([a-zA-Z]+))?/i);
+    const hgvsMatch = clean.match(/(?:NM_\d+|ENST\d+)/i);
+
+    let chrom, pos, ref, alt;
+
+    if (hyphenMatch) {
+        chrom = hyphenMatch[1]; pos = hyphenMatch[2]; ref = hyphenMatch[3]; alt = hyphenMatch[4];
+    } else if (colon4Match) {
+        chrom = colon4Match[1]; pos = colon4Match[2]; ref = colon4Match[3]; alt = colon4Match[4];
+    } else if (space4Match) {
+        chrom = space4Match[1]; pos = space4Match[2]; ref = space4Match[3]; alt = space4Match[4];
+    } else if (standardMatch) {
+        chrom = standardMatch[1]; pos = standardMatch[2];
+        ref = standardMatch[3] || standardMatch[5];
+        alt = standardMatch[4] || standardMatch[6];
+    } else if (hgvsMatch) {
+        return { valid: true };
+    } else {
+        return {
+            valid: false,
+            error: "Formato de variante inválido. Usa un formato reconocido como '5:169670598 G>A', 'chr8-140300616-T-G' o '6 31740453 G T'."
+        };
+    }
+
+    const validChrPattern = /^(?:chr)?([1-9]|1[0-9]|2[0-2]|X|Y|MT|M)$/i;
+    if (!validChrPattern.test(chrom)) {
+        return {
+            valid: false,
+            error: `Cromosoma inválido ("${chrom}"). Debe ser un cromosoma humano válido (1-22, X, Y, MT).`
+        };
+    }
+
+    const numPos = parseInt(pos, 10);
+    if (!Number.isInteger(numPos) || numPos <= 0) {
+        return {
+            valid: false,
+            error: `Coordenada de posición genómica inválida ("${pos}"). Debe ser un número entero positivo.`
+        };
+    }
+
+    if (ref && alt) {
+        const nucleotideRegex = /^[ACGT]+$/i;
+        if (!nucleotideRegex.test(ref) || !nucleotideRegex.test(alt)) {
+            return {
+                valid: false,
+                error: `Formato de variante inválido o base incorrecta ("${ref}>${alt}"). Los alelos deben contener únicamente nucleótidos válidos (A, C, T, G).`
+            };
+        }
+    }
+
+    return { valid: true };
+}
+
+/**
+ * Returns reverse complement of a nucleotide sequence
+ */
+export function reverseComplement(seq) {
+    if (!seq) return '';
+    const comp = {
+        'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C',
+        'a': 't', 't': 'a', 'c': 'g', 'g': 'c',
+        'N': 'N', 'n': 'n'
+    };
+    return seq.split('').reverse().map(b => comp[b] || b).join('');
+}
+
+/**
  * Main Download Function directly implementing the 3 steps of download.py
  */
 export async function downloadGenomicStructure(parsedVar, onProgress = null) {
@@ -277,10 +357,15 @@ export async function downloadGenomicStructure(parsedVar, onProgress = null) {
         throw new Error(`No se encontró ningún gen en esa coordenada exacta (Chr${chrom}:${pos}).`);
     }
 
-    // --- 2. CONSTRUCCIÓN DE EXONES E INTRONES ---
+    // --- 2. CONSTRUCCIÓN DE EXONES E INTRONES EN ORDEN BIOLÓGICO DE TRANSCRIPCIÓN ---
     if (onProgress) onProgress(`Procesando estructura de exones e intrones para ${geneName}...`);
     
-    const rawExons = (transcriptData.Exon || []).slice().sort((a, b) => a.start - b.start);
+    // Si strand es +1, el orden 5' -> 3' va de menor a mayor coordenada genómica
+    // Si strand es -1, el orden 5' -> 3' va de mayor a menor coordenada genómica (Exón 1 en coord alta)
+    const rawExons = (transcriptData.Exon || []).slice().sort((a, b) => {
+        return strand === 1 ? (a.start - b.start) : (b.start - a.start);
+    });
+
     const geneStart = transcriptData.start;
     const geneEnd = transcriptData.end;
     const translation = transcriptData.Translation || null;
@@ -290,7 +375,7 @@ export async function downloadGenomicStructure(parsedVar, onProgress = null) {
     let cumulativeCodingBp = 0;
 
     rawExons.forEach((ex, idx) => {
-        const exonNum = strand === 1 ? idx + 1 : rawExons.length - idx;
+        const exonNum = idx + 1; // Exón 1, Exón 2... en estricto orden 5' -> 3' del transcripto
         const isCoding = translation ? (ex.end >= translation.start && ex.start <= translation.end) : true;
         
         let codingStart = null;
@@ -319,32 +404,48 @@ export async function downloadGenomicStructure(parsedVar, onProgress = null) {
             codingLen,
             id: ex.id,
             phase: entryPhase,
-            endPhase: exitPhase
+            endPhase: exitPhase,
+            strandNumeric: strand
         });
-
-        // Intrón siguiente (en orden genómico)
-        if (idx < rawExons.length - 1) {
-            const nextExon = rawExons[idx + 1];
-            const intronStart = ex.end + 1;
-            const intronEnd = nextExon.start - 1;
-            const intronNum = strand === 1 ? idx + 1 : rawExons.length - 1 - idx;
-
-            introns.push({
-                intronNum,
-                start: intronStart,
-                end: intronEnd,
-                length: Math.max(0, intronEnd - intronStart + 1),
-                donorExon: strand === 1 ? exonNum : exonNum - 1,
-                acceptorExon: strand === 1 ? exonNum + 1 : exonNum
-            });
-        }
     });
 
-    // Orden biológico (Exón 1, Exón 2...)
-    exons.sort((a, b) => a.exonNum - b.exonNum);
+    // Construcción de intrones en orden biológico (Intrón 1 entre Exón 1 y Exón 2)
+    for (let i = 0; i < exons.length - 1; i++) {
+        const currentExon = exons[i];
+        const nextExon = exons[i + 1];
+        const intronNum = i + 1;
+        
+        let intronStart, intronEnd;
+        let donorSpliceCoord, acceptorSpliceCoord;
 
-    // --- 3. DESCARGA DE SECUENCIA GENÓMICA (CON INTRONES) ---
-    if (onProgress) onProgress(`Descargando secuencia genómica (con intrones) de ${geneName}...`);
+        if (strand === 1) {
+            intronStart = currentExon.end + 1;
+            intronEnd = nextExon.start - 1;
+            donorSpliceCoord = currentExon.end;
+            acceptorSpliceCoord = nextExon.start;
+        } else {
+            // Hebra reversa (-1): currentExon tiene coordenadas más altas que nextExon
+            intronStart = nextExon.end + 1;
+            intronEnd = currentExon.start - 1;
+            donorSpliceCoord = currentExon.start; // Donante adyacente a Exón i (coordenada alta)
+            acceptorSpliceCoord = nextExon.end;   // Aceptor adyacente a Exón i+1 (coordenada baja)
+        }
+
+        introns.push({
+            intronNum,
+            start: intronStart,
+            end: intronEnd,
+            length: Math.max(0, intronEnd - intronStart + 1),
+            donorExon: currentExon.exonNum,
+            acceptorExon: nextExon.exonNum,
+            donorSpliceCoord,
+            acceptorSpliceCoord,
+            strandNumeric: strand
+        });
+    }
+
+    // --- 3. CARGA DE SECUENCIA GENÓMICA (CON INTRONES) ---
+    if (onProgress) onProgress(`Cargando secuencia genómica (con intrones) de ${geneName}...`);
 
     let genomicSequence = "";
     try {
@@ -356,7 +457,7 @@ export async function downloadGenomicStructure(parsedVar, onProgress = null) {
             genomicSequence = seqJson.seq || "";
         }
     } catch (e) {
-        console.warn("Aviso en descarga de secuencia genómica completa:", e);
+        console.warn("Aviso en carga de secuencia genómica completa:", e);
     }
 
     // Pre-cargar búfer de la región de la variante (+/- 600 pb)
@@ -390,8 +491,17 @@ export async function downloadGenomicStructure(parsedVar, onProgress = null) {
     if (variantLocation.type === 'intergenic') {
         for (const intr of introns) {
             if (pos >= intr.start && pos <= intr.end) {
-                const distToDonor = pos - intr.start + 1;
-                const distToAcceptor = -(intr.end - pos + 1);
+                let distToDonor, distToAcceptor;
+
+                if (strand === 1) {
+                    distToDonor = pos - intr.start + 1;
+                    distToAcceptor = -(intr.end - pos + 1);
+                } else {
+                    // En hebra reversa (-1), el donante 5' está en intr.end y el aceptor 3' en intr.start
+                    distToDonor = intr.end - pos + 1;
+                    distToAcceptor = -(pos - intr.start + 1);
+                }
+
                 const isDonor = Math.abs(distToDonor) <= Math.abs(distToAcceptor);
                 const offset = isDonor ? `+${distToDonor}` : `${distToAcceptor}`;
                 const isCanonical = (distToDonor === 1 || distToDonor === 2 || distToAcceptor === -1 || distToAcceptor === -2);

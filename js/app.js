@@ -5,7 +5,7 @@
  * Step 4 (Micro Base Viewer), Step 5 (Classification), and Step 6 (Consequence Simulator).
  */
 
-import { parseGenomicInput, downloadGenomicStructure } from './ensemblService.js';
+import { parseGenomicInput, downloadGenomicStructure, validateGenomicInput } from './ensemblService.js';
 import { renderGenomicExonMap, renderFranklinBaseViewer, renderConsequenceSimulator } from './visualRenderer.js';
 
 // Global App State
@@ -23,9 +23,14 @@ const transcriptInput = $('transcriptInput');
 const variantTypeSelect = $('variantTypeSelect');
 const calculateBtn = $('calculateBtn');
 const presetPills = $('presetPills');
-const downloadFastaBtn = $('downloadFastaBtn');
 const themeToggleBtn = $('themeToggleBtn');
-const exportReportBtn = $('exportReportBtn');
+const aboutBtn = $('aboutBtn');
+const aboutModal = $('aboutModal');
+const closeAboutModalBtn = $('closeAboutModalBtn');
+const copyAliasMpBtn = $('copyAliasMpBtn');
+const copyAliasSuccessMsg = $('copyAliasSuccessMsg');
+const validationErrorBox = $('validationErrorBox');
+const validationErrorText = $('validationErrorText');
 
 // Display Containers
 const dashboardGrid = $('dashboardGrid');
@@ -62,24 +67,17 @@ function init() {
 
 function setupEventListeners() {
     if (calculateBtn) {
-        calculateBtn.addEventListener('click', () => {
-            const vInput = variantInput?.value.trim();
-            const txInput = transcriptInput?.value.trim();
-            const typeInput = variantTypeSelect?.value;
-            if (!vInput) {
-                alert("Por favor ingresa una variante genómica (ej. 5:169670615 A>G o 1:234607399 A>G).");
-                return;
-            }
-            runAnalysis(vInput, txInput, typeInput);
-        });
+        calculateBtn.addEventListener('click', handleCalculateClick);
     }
 
     if (variantInput) {
         variantInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') calculateBtn.click();
+            if (e.key === 'Enter') handleCalculateClick();
         });
+        variantInput.addEventListener('input', hideValidationError);
     }
 
+    // Preset pills: populate inputs WITHOUT auto-running analysis
     if (presetPills) {
         presetPills.addEventListener('click', (e) => {
             const pill = e.target.closest('.preset-pill');
@@ -92,7 +90,8 @@ function setupEventListeners() {
             if (variantInput) variantInput.value = varCoord;
             if (transcriptInput) transcriptInput.value = txId;
 
-            runAnalysis(varCoord, txId);
+            hideValidationError();
+            // User requested: Do NOT run analysis automatically on preset click
         });
     }
 
@@ -107,16 +106,106 @@ function setupEventListeners() {
         });
     }
 
-    if (downloadFastaBtn) {
-        downloadFastaBtn.addEventListener('click', handleDownloadFasta);
-    }
-
     if (themeToggleBtn) {
         themeToggleBtn.addEventListener('click', toggleTheme);
     }
 
-    if (exportReportBtn) {
-        exportReportBtn.addEventListener('click', handleExportReport);
+    // Modal Acerca de (Pop-up Overlay)
+    window.openAboutModal = (e) => {
+        if (e && e.preventDefault) e.preventDefault();
+        const modal = document.getElementById('aboutModal');
+        if (modal) {
+            if (typeof modal.showModal === 'function') {
+                if (!modal.open) modal.showModal();
+            } else {
+                modal.setAttribute('open', '');
+                modal.style.display = 'flex';
+            }
+        }
+    };
+
+    window.closeAboutModal = (e) => {
+        if (e && e.preventDefault) e.preventDefault();
+        const modal = document.getElementById('aboutModal');
+        if (modal) {
+            if (typeof modal.close === 'function') {
+                if (modal.open) modal.close();
+            } else {
+                modal.removeAttribute('open');
+                modal.style.display = 'none';
+            }
+        }
+    };
+
+    if (aboutBtn) {
+        aboutBtn.addEventListener('click', window.openAboutModal);
+    }
+
+    if (closeAboutModalBtn) {
+        closeAboutModalBtn.addEventListener('click', window.closeAboutModal);
+    }
+
+    if (aboutModal) {
+        aboutModal.addEventListener('click', (e) => {
+            if (e.target === aboutModal) {
+                window.closeAboutModal(e);
+            }
+        });
+    }
+
+    window.addEventListener('keydown', (e) => {
+        const modal = document.getElementById('aboutModal');
+        if (e.key === 'Escape' && modal && modal.open) {
+            window.closeAboutModal(e);
+        }
+    });
+
+    if (copyAliasMpBtn) {
+        copyAliasMpBtn.addEventListener('click', handleCopyAlias);
+    }
+}
+
+function handleCalculateClick() {
+    const vInput = variantInput?.value.trim();
+    const txInput = transcriptInput?.value.trim();
+    const typeInput = variantTypeSelect?.value;
+
+    const validation = validateGenomicInput(vInput);
+    if (!validation.valid) {
+        showValidationError(validation.error);
+        return;
+    }
+    hideValidationError();
+    runAnalysis(vInput, txInput, typeInput);
+}
+
+function showValidationError(msg) {
+    if (validationErrorBox && validationErrorText) {
+        validationErrorText.textContent = msg;
+        validationErrorBox.style.display = 'flex';
+    } else {
+        alert(msg);
+    }
+}
+
+function hideValidationError() {
+    if (validationErrorBox) {
+        validationErrorBox.style.display = 'none';
+    }
+}
+
+async function handleCopyAlias() {
+    const alias = "lorenzo.bioinf.egc";
+    try {
+        await navigator.clipboard.writeText(alias);
+    } catch (err) {
+        prompt("Copia el Alias de Mercado Pago:", alias);
+    }
+    if (copyAliasSuccessMsg) {
+        copyAliasSuccessMsg.style.display = 'block';
+        setTimeout(() => {
+            copyAliasSuccessMsg.style.display = 'none';
+        }, 3500);
     }
 }
 
@@ -155,7 +244,7 @@ async function runAnalysis(varString, txString = null, typeString = null) {
             dashboardGrid.style.display = 'flex';
         }
 
-        renderAll(model);
+        await renderAll(model);
     } catch (err) {
         console.error("Error en análisis:", err);
         alert(`❌ ${err.message}`);
@@ -168,7 +257,7 @@ async function runAnalysis(varString, txString = null, typeString = null) {
 /**
  * Renders all dashboard panels
  */
-function renderAll(model) {
+async function renderAll(model) {
     const { geneName, transcriptId, chromosome, strand, start, end, exons, introns, variant, variantLocation } = model;
 
     // 1. Header Info
@@ -194,7 +283,7 @@ function renderAll(model) {
 
     // 3. Paso 4: Visor a Nivel de Bases (WT default)
     if (genooxViewerContainer) {
-        renderFranklinBaseViewer(genooxViewerContainer, model, variant.pos);
+        await renderFranklinBaseViewer(genooxViewerContainer, model, variant.pos);
     }
 
     // 4. Paso 5: Clasificación y Métricas
@@ -219,26 +308,26 @@ function updateClassificationMetrics(model) {
 
     if (variantLocation.type === 'intron') {
         if (variantLocation.isCanonicalSplice) {
-            category = "Splicing Canónico (Donante/Aceptor)";
-            subText = `Sitio crítico ${variantLocation.offset}`;
+            category = "Splicing Canónico";
+            subText = `Sitio crítico (${variantLocation.offset})`;
             badgeClass = "badge-danger";
-            desc = `La variante se ubica en el ${variantLocation.name} a ${variantLocation.offset} pb de la unión exón-intrón canónica. Afecta directamente el dinucleótido GT/AG esencial para el reconocimiento por el spliceosoma.`;
+            desc = `Variante en unión de empalme canónica dinucleótido GT/AG (${variantLocation.name}, offset ${variantLocation.offset}).`;
         } else if (variantLocation.isSpliceSite) {
-            category = "Splicing Intrónico Cercano";
-            subText = `Región flanqueante ${variantLocation.offset}`;
+            category = "Splicing Intrónico";
+            subText = `Región yuxta-exónica (${variantLocation.offset})`;
             badgeClass = "badge-warning";
-            desc = `La variante se ubica en la región intrónica flanqueante (${variantLocation.offset} pb del splice site). Puede alterar sitios de consenso o secuencias reguladoras de splicing.`;
+            desc = `Variante intrónica cercana (${variantLocation.offset} pb de la unión exón-intrón).`;
         } else {
-            category = "Intrónica Profunda (Deep Intronic)";
-            subText = `Distancia ${variantLocation.offset} pb`;
+            category = "Intrónica";
+            subText = `Profunda (${variantLocation.offset} pb)`;
             badgeClass = "badge-neutral";
-            desc = `Variante intrónica profunda sin afectación directa de sitios canónicos conocidos.`;
+            desc = `Variante en región intrónica profunda.`;
         }
     } else if (variantLocation.type === 'exon') {
         category = "Exónica";
         subText = `${variantLocation.name}`;
         badgeClass = "badge-danger";
-        desc = `La variante se ubica dentro de la secuencia del ${variantLocation.name} (Chr${chromosome}:${variant.pos.toLocaleString()}).`;
+        desc = `Variante dentro de la secuencia codificante del ${variantLocation.name}.`;
     }
 
     if (variantTypeVal) variantTypeVal.textContent = category;
@@ -266,37 +355,6 @@ function updateClassificationMetrics(model) {
     }
 }
 
-/**
- * Handles FASTA download matching download.py output
- */
-function handleDownloadFasta() {
-    if (!state.currentModel) {
-        alert("Primero realiza un análisis para generar la secuencia genómica.");
-        return;
-    }
-
-    const { geneName, chromosome, start, end, strand, sequence, fastaFilename } = state.currentModel;
-    const fastaContent = `>${geneName}_Genomic_Region chr${chromosome}:${start}-${end} strand:${strand}\n${(sequence || '').match(/.{1,60}/g)?.join('\n') || sequence}\n`;
-
-    const blob = new Blob([fastaContent], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fastaFilename || `${geneName}_genomic.fasta`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-}
-
-function handleExportReport() {
-    if (!state.currentModel) {
-        alert("No hay ningún análisis cargado.");
-        return;
-    }
-    window.print();
-}
-
 function updateStatus(text, isSuccess = null) {
     if (!downloadStatusBox || !downloadStatusText) return;
     downloadStatusBox.style.display = 'flex';
@@ -315,10 +373,14 @@ function setLoading(isLoading) {
     if (calculateBtn) {
         calculateBtn.disabled = isLoading;
         calculateBtn.innerHTML = isLoading 
-            ? `<span>⏳ Descargando desde Ensembl...</span>` 
-            : `<span>⚡ Descargar y Visualizar</span>`;
+            ? `<span>⏳ Cargando datos desde Ensembl...</span>` 
+            : `<span>⚡ Cargar y Visualizar</span>`;
     }
 }
 
 // Start
-document.addEventListener('DOMContentLoaded', init);
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+} else {
+    init();
+}

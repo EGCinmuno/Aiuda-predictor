@@ -12,7 +12,8 @@
  */
 
 import { CODON_TABLE, aa1to3, aaFullName } from './geneticCode.js';
-import { fetchRegionSequence } from './ensemblService.js';
+import { fetchRegionSequence, reverseComplement } from './ensemblService.js';
+import { fetchSpliceAIPrediction } from './spliceaiService.js';
 
 // Base colors
 export const BASE_COLORS = {
@@ -40,7 +41,8 @@ export async function getSplitCodonInfo(currentExon, exons, chromosome) {
     if (!currentExon || !currentExon.isCoding || currentExon.endPhase === 0) {
         return null;
     }
-    const cacheKey = `${chromosome}_E${currentExon.exonNum}_end`;
+    const isAntisense = (currentExon.strandNumeric === -1);
+    const cacheKey = `${chromosome}_E${currentExon.exonNum}_end_${isAntisense ? 'neg' : 'pos'}`;
     if (splitCodonCache.has(cacheKey)) {
         return splitCodonCache.get(cacheKey);
     }
@@ -52,8 +54,17 @@ export async function getSplitCodonInfo(currentExon, exons, chromosome) {
     if (!nextExon) return null;
 
     try {
-        const tailSeq = await fetchRegionSequence(chromosome, currentExon.end - splitCount1 + 1, currentExon.end);
-        const headSeq = await fetchRegionSequence(chromosome, nextExon.start, nextExon.start + splitCount2 - 1);
+        let tailSeq, headSeq;
+        if (!isAntisense) {
+            tailSeq = await fetchRegionSequence(chromosome, currentExon.end - splitCount1 + 1, currentExon.end);
+            headSeq = await fetchRegionSequence(chromosome, nextExon.start, nextExon.start + splitCount2 - 1);
+        } else {
+            // Hebra reversa (-1): 3' end del currentExon en currentExon.start, 5' de nextExon en nextExon.end
+            const rawTail = await fetchRegionSequence(chromosome, currentExon.start, currentExon.start + splitCount1 - 1);
+            const rawHead = await fetchRegionSequence(chromosome, nextExon.end - splitCount2 + 1, nextExon.end);
+            tailSeq = reverseComplement(rawTail);
+            headSeq = reverseComplement(rawHead);
+        }
 
         if (tailSeq && headSeq) {
             const fullCodon = (tailSeq + headSeq).toUpperCase();
@@ -83,40 +94,70 @@ export async function getSplitCodonInfo(currentExon, exons, chromosome) {
 }
 
 /**
- * Helper to get a codon-aligned tail segment of an exon.
- * Calculates a genomic start position such that (pos - exon.start + exon.phase) % 3 === 0 (Phase 0),
- * ensuring that sequence slices in Step 6 start on clean codon boundaries identical to Step 4.
+ * Helper to get a codon-aligned tail segment of an exon in 5' -> 3' biological orientation.
+ * Ensures sequence slices in Step 6 start on clean codon boundaries (Phase 0).
  */
 export function getCodonAlignedExonTail(exon, targetLen = 15) {
     if (!exon || !exon.isCoding) {
         return { start: exon ? exon.start : 1, end: exon ? exon.end : 1, phase: 0 };
     }
-    let pos = Math.max(exon.start, exon.end - targetLen + 1);
-    const rem = (pos - exon.start + exon.phase) % 3;
-    if (rem !== 0) {
-        if (pos - rem >= exon.start) {
-            pos = pos - rem; // step back to codon boundary
-        } else {
-            pos = pos + (3 - rem); // step forward to codon boundary
+    const isAntisense = (exon.strandNumeric === -1);
+    if (isAntisense) {
+        // En hebra (-1), el 3' tail biológico está en exon.start; el 5' en exon.end
+        let p = Math.min(exon.end, exon.start + targetLen - 1);
+        const rem = (exon.end - p + exon.phase) % 3;
+        if (rem !== 0) {
+            if (p + rem <= exon.end) p += rem;
+            else p -= (3 - rem);
         }
+        return { start: exon.start, end: p, phase: 0 };
+    } else {
+        let pos = Math.max(exon.start, exon.end - targetLen + 1);
+        const rem = (pos - exon.start + exon.phase) % 3;
+        if (rem !== 0) {
+            if (pos - rem >= exon.start) {
+                pos = pos - rem; // retroceder a límite de codón
+            } else {
+                pos = pos + (3 - rem); // avanzar a límite de codón
+            }
+        }
+        return {
+            start: pos,
+            end: exon.end,
+            phase: 0 // Fase 0 garantizada
+        };
     }
-    return {
-        start: pos,
-        end: exon.end,
-        phase: 0 // guaranteed phase 0
-    };
 }
 
 /**
- * Helper to get an exon head segment starting from exon.start with its native phase.
+ * Helper to get an exon head segment in 5' -> 3' biological orientation starting with native phase.
  */
 export function getCodonAlignedExonHead(exon, targetLen = 15) {
     if (!exon) return { start: 1, end: 1, phase: 0 };
-    return {
-        start: exon.start,
-        end: Math.min(exon.end, exon.start + targetLen - 1),
-        phase: exon.phase ?? 0
-    };
+    const isAntisense = (exon.strandNumeric === -1);
+    if (isAntisense) {
+        // En hebra (-1), el 5' head biológico está en exon.end
+        return {
+            start: Math.max(exon.start, exon.end - targetLen + 1),
+            end: exon.end,
+            phase: exon.phase ?? 0
+        };
+    } else {
+        return {
+            start: exon.start,
+            end: Math.min(exon.end, exon.start + targetLen - 1),
+            phase: exon.phase ?? 0
+        };
+    }
+}
+
+/**
+ * Fetches an exon segment and formats it in 5' -> 3' mRNA orientation
+ */
+export async function fetchExonSegment5to3(chromosome, segInfo, strandNumeric) {
+    let raw = await fetchRegionSequence(chromosome, segInfo.start, segInfo.end);
+    if (!raw) raw = "N".repeat(segInfo.end - segInfo.start + 1);
+    return strandNumeric === -1 ? reverseComplement(raw) : raw;
 }
 
 /**
@@ -434,391 +475,442 @@ export async function renderFranklinBaseViewer(container, model, customCenterPos
         isShowingMutantView = showMutant;
     }
 
-    const { exons, introns, chromosome, variant, variantLocation } = model;
-    
-    let targetPos = variant.pos;
-    if (customCenterPos !== null && customCenterPos !== undefined) {
-        targetPos = customCenterPos;
-    } else if (variantLocation.type === 'exon' && variantLocation.exon) {
-        targetPos = variantLocation.exon.start;
-    }
-
-    const half = Math.floor(BASE_WINDOW_SIZE / 2);
-    let winStart = Math.max(1, targetPos - half);
-    let winEnd = winStart + BASE_WINDOW_SIZE - 1;
-    const windowLength = winEnd - winStart + 1;
-
-    let realSequence = await fetchRegionSequence(chromosome, winStart, winEnd);
-    if (!realSequence || realSequence.length === 0) {
-        realSequence = "N".repeat(windowLength);
-    }
-
-    container.innerHTML = '';
-
-    const viewerWrapper = document.createElement('div');
-    viewerWrapper.className = 'franklin-viewer';
-
-    const currentExonIndex = exons.findIndex(ex => (targetPos >= ex.start && targetPos <= ex.end) || (ex.start >= winStart && ex.start <= winEnd));
-    const prevExon = currentExonIndex > 0 ? exons[currentExonIndex - 1] : (exons.length > 0 && targetPos > exons[0].start ? exons[0] : null);
-    const nextExon = currentExonIndex >= 0 && currentExonIndex < exons.length - 1 ? exons[currentExonIndex + 1] : (exons.length > 1 && targetPos < exons[exons.length - 1].end ? exons[exons.length - 1] : null);
-
-    // 1. Header Bar
-    const headerBar = document.createElement('div');
-    headerBar.className = 'franklin-header';
-    headerBar.innerHTML = `
-        <div class="franklin-pill">
-            Chr${chromosome}:${winStart.toLocaleString()}–${winEnd.toLocaleString()} 🔍
-        </div>
-        <div class="franklin-nav">
-            <button id="fNav-prevExon" class="btn-secondary" title="Saltar al Exón Anterior" ${!prevExon ? 'disabled style="opacity:0.5;"' : ''}>
-                ⏮ ${prevExon ? `Exón ${prevExon.exonNum}` : 'Inicio'}
-            </button>
-            <button id="fNav-prev" class="btn-secondary" title="Desplazar 10 pb río arriba">◄ −10 pb</button>
-            <button id="fNav-center" class="btn-secondary" title="Centrar en la posición de la variante">🎯 Centrar Variante</button>
-            <button id="fNav-next" class="btn-secondary" title="Desplazar 10 pb río abajo">+10 pb ►</button>
-            <button id="fNav-nextExon" class="btn-secondary" title="Saltar al Próximo Exón" ${!nextExon ? 'disabled style="opacity:0.5;"' : ''}>
-                ${nextExon ? `Exón ${nextExon.exonNum}` : 'Fin'} ⏭
-            </button>
-        </div>
-        <div class="franklin-view-mode-toggle">
-            <button id="toggleWtMutBtn" class="btn-toggle-mode ${isShowingMutantView ? 'is-mut' : 'is-wt'}">
-                ${isShowingMutantView ? '⚡ Mostrando: Variante Mutada' : '🧬 Mostrando: Secuencia Salvaje (WT)'}
-            </button>
-        </div>
-    `;
-    viewerWrapper.appendChild(headerBar);
-
-    // 2. Focus Indicator Banner (Tarea 1: Indicador Prominente de Exón / Intrón en Foco)
-    const focusedExon = exons.find(ex => (targetPos >= ex.start && targetPos <= ex.end));
-    const focusedIntron = introns.find(intr => (targetPos >= intr.start && targetPos <= intr.end));
-
-    const focusBanner = document.createElement('div');
-    if (focusedExon) {
-        focusBanner.className = 'franklin-focus-banner';
-        focusBanner.innerHTML = `
-            <div style="display:flex; align-items:center; gap:8px;">
-                <span class="focus-pin">📍</span>
-                <span class="focus-title">Analizando impacto sobre: <strong>[ Exón ${focusedExon.exonNum} ]</strong> (${focusedExon.length.toLocaleString()} pb &bull; Fase Entrada: ${focusedExon.phase} &bull; Fase Salida: ${focusedExon.endPhase})</span>
-            </div>
-            <span class="focus-coords">Chr${chromosome}:${focusedExon.start.toLocaleString()}–${focusedExon.end.toLocaleString()}</span>
-        `;
-    } else if (focusedIntron) {
-        focusBanner.className = 'franklin-focus-banner is-intron-focus';
-        focusBanner.innerHTML = `
-            <div style="display:flex; align-items:center; gap:8px;">
-                <span class="focus-pin">📍</span>
-                <span class="focus-title">Analizando impacto sobre: <strong>[ Intrón ${focusedIntron.intronNum} ]</strong> (${focusedIntron.length.toLocaleString()} pb &bull; Entre Exón ${focusedIntron.donorExon} y Exón ${focusedIntron.acceptorExon})</span>
-            </div>
-            <span class="focus-coords">Chr${chromosome}:${focusedIntron.start.toLocaleString()}–${focusedIntron.end.toLocaleString()}</span>
-        `;
-    } else {
-        focusBanner.className = 'franklin-focus-banner';
-        focusBanner.innerHTML = `
-            <div style="display:flex; align-items:center; gap:8px;">
-                <span class="focus-pin">📍</span>
-                <span class="focus-title">Analizando región genómica en Chr${chromosome}:${winStart.toLocaleString()}–${winEnd.toLocaleString()}</span>
-            </div>
-            <span class="focus-coords">Ventana de ${windowLength} pb</span>
-        `;
-    }
-    viewerWrapper.appendChild(focusBanner);
-
-    const viewport = document.createElement('div');
-    viewport.className = 'franklin-viewport';
-
-    const junctionsInWindow = [];
-    exons.forEach(ex => {
-        if (ex.end >= winStart && ex.end <= winEnd) {
-            junctionsInWindow.push({ pos: ex.end, type: 'donor', exonNum: ex.exonNum });
-        }
-        if (ex.start >= winStart && ex.start <= winEnd) {
-            junctionsInWindow.push({ pos: ex.start, type: 'acceptor', exonNum: ex.exonNum });
-        }
-    });
-
-    // 2.1 Genomic Ruler Track
-    const rulerTrack = document.createElement('div');
-    rulerTrack.className = 'f-ruler-track';
-    rulerTrack.style.display = 'grid';
-    rulerTrack.style.gridTemplateColumns = `repeat(${windowLength}, minmax(0, 1fr))`;
-
-    for (let p = winStart; p <= winEnd; p++) {
-        const cell = document.createElement('div');
-        cell.className = 'f-ruler-cell';
-        if (p % 10 === 0 || p === winStart) {
-            cell.innerHTML = `
-                <span class="f-tick">◆</span>
-                <span class="f-pos">${p.toLocaleString()}</span>
-            `;
-        }
-        rulerTrack.appendChild(cell);
-    }
-    viewport.appendChild(rulerTrack);
-
-    function getExonAt(pos) {
-        return exons.find(e => pos >= e.start && pos <= e.end);
-    }
-
-    // 2.2 Region Header Track (Tarea 1: Encabezado claro [ Exón 4 ] / [ Intrón X ] arriba de los aminoácidos)
-    const regionHeaderTrack = document.createElement('div');
-    regionHeaderTrack.className = 'f-region-header-track';
-    regionHeaderTrack.style.display = 'grid';
-    regionHeaderTrack.style.gridTemplateColumns = `repeat(${windowLength}, minmax(0, 1fr))`;
-
-    for (let p = winStart; p <= winEnd; ) {
-        const curEx = getExonAt(p);
-        if (curEx) {
-            const spanStart = p;
-            const spanEnd = Math.min(winEnd, curEx.end);
-            const spanLen = spanEnd - spanStart + 1;
-            
-            const box = document.createElement('div');
-            box.className = 'f-region-box is-exon';
-            box.style.gridColumn = `span ${spanLen}`;
-            box.innerHTML = `<span>[ Exón ${curEx.exonNum} ]</span>`;
-            box.title = `Exón ${curEx.exonNum} (${curEx.length.toLocaleString()} pb) [Chr${chromosome}:${curEx.start.toLocaleString()}–${curEx.end.toLocaleString()}]`;
-            regionHeaderTrack.appendChild(box);
-            p += spanLen;
-        } else {
-            const curIntr = introns.find(i => p >= i.start && p <= i.end);
-            const nextE = exons.find(e => e.start > p);
-            const intronEnd = nextE ? nextE.start - 1 : winEnd;
-            const spanEnd = Math.min(winEnd, intronEnd);
-            const spanLen = Math.max(1, spanEnd - p + 1);
-
-            const box = document.createElement('div');
-            box.className = 'f-region-box is-intron';
-            box.style.gridColumn = `span ${spanLen}`;
-            box.innerHTML = `<span>[ Intrón ${curIntr ? curIntr.intronNum : ''} ]</span>`;
-            box.title = `Región Intrónica [Chr${chromosome}:${p.toLocaleString()}–${spanEnd.toLocaleString()}]`;
-            regionHeaderTrack.appendChild(box);
-            p += spanLen;
-        }
-    }
-    viewport.appendChild(regionHeaderTrack);
-
-    // 2.3 Amino Acid & Chevron Track
-    const aaTrack = document.createElement('div');
-    aaTrack.className = 'f-aa-track';
-    aaTrack.style.display = 'grid';
-    aaTrack.style.gridTemplateColumns = `repeat(${windowLength}, minmax(0, 1fr))`;
-
-    for (let p = winStart; p <= winEnd; ) {
-        const currentExon = getExonAt(p);
+    try {
+        const { exons, introns, chromosome, variant, variantLocation } = model;
+        const isAntisense = (model.strandNumeric === -1 || model.strand === '-');
         
-        if (currentExon && currentExon.isCoding) {
-            const offsetInExon = p - currentExon.start;
-            const phase = (offsetInExon + currentExon.phase) % 3;
-            const remainingBasesInThisExon = currentExon.end - p + 1;
+        let targetPos = variant.pos;
+        if (customCenterPos !== null && customCenterPos !== undefined) {
+            targetPos = customCenterPos;
+        }
 
-            if (phase === 0) {
-                if (remainingBasesInThisExon >= 3 && p + 2 <= winEnd) {
-                    const seqIdx = p - winStart;
-                    let codonBases = realSequence.substring(seqIdx, seqIdx + 3).toUpperCase();
-                    
-                    if (isShowingMutantView && variant.pos >= p && variant.pos <= p + 2) {
-                        const varOffset = variant.pos - p;
-                        const arr = codonBases.split('');
-                        arr[varOffset] = variant.alt;
-                        codonBases = arr.join('');
-                    }
+        const half = Math.floor(BASE_WINDOW_SIZE / 2);
+        let winStart = Math.max(1, targetPos - half);
+        let winEnd = winStart + BASE_WINDOW_SIZE - 1;
+        const windowLength = winEnd - winStart + 1;
 
-                    const aa = CODON_TABLE[codonBases] || 'X';
-                    const aa3 = aa1to3(aa);
+        let realSequence = await fetchRegionSequence(chromosome, winStart, winEnd);
+        if (!realSequence || realSequence.length === 0) {
+            realSequence = "N".repeat(windowLength);
+        }
 
-                    const chevron = document.createElement('div');
-                    chevron.className = `f-aa-chevron ${aa === '*' ? 'is-stop' : ''}`;
-                    chevron.style.gridColumn = 'span 3';
-                    chevron.innerHTML = `<span>${aa === '*' ? 'Stop' : aa3}</span>`;
-                    chevron.title = `Codón ${codonBases} → ${aaFullName(aa)} (${aa3}) [Chr${chromosome}:${p}-${p+2}]`;
-                    aaTrack.appendChild(chevron);
-                    p += 3;
-                } else if (remainingBasesInThisExon < 3) {
-                    const splitCount = remainingBasesInThisExon;
-                    const splitInfo = await getSplitCodonInfo(currentExon, exons, chromosome);
+        container.innerHTML = '';
 
-                    const splitEl = document.createElement('div');
-                    splitEl.className = 'f-aa-split';
-                    splitEl.style.gridColumn = `span ${splitCount}`;
+        const viewerWrapper = document.createElement('div');
+        viewerWrapper.className = 'franklin-viewer';
 
-                    if (splitInfo) {
-                        splitEl.innerHTML = `<span>[${splitInfo.aa3} ${splitCount}/3 ➔]</span>`;
-                        splitEl.title = `Codón dividido en límite de Exón ${currentExon.exonNum}:\n${splitInfo.tailSeq} (Exón ${splitInfo.currentExonNum}) + ${splitInfo.headSeq} (Exón ${splitInfo.nextExonNum}) = ${splitInfo.fullCodon} → ${splitInfo.name} (${splitInfo.aa3})`;
+        // Biological adjacent exon resolution (strictly next in splicing sequence N+1 / N-1, NOT last exon of gene)
+        const focusedExon = exons.find(ex => (targetPos >= ex.start && targetPos <= ex.end));
+        const focusedIntron = introns.find(intr => (targetPos >= intr.start && targetPos <= intr.end));
+
+        let prevExon = null;
+        let nextExon = null;
+
+        if (focusedExon) {
+            prevExon = exons.find(e => e.exonNum === focusedExon.exonNum - 1) || null;
+            nextExon = exons.find(e => e.exonNum === focusedExon.exonNum + 1) || null;
+        } else if (focusedIntron) {
+            // Between donorExon and acceptorExon
+            prevExon = exons.find(e => e.exonNum === focusedIntron.donorExon) || null;
+            nextExon = exons.find(e => e.exonNum === focusedIntron.acceptorExon) || null;
+        } else {
+            // Flanqueante: buscar exones adyacentes inmediatos en orden del transcripto
+            if (!isAntisense) {
+                const ups = exons.filter(e => e.end < targetPos).sort((a, b) => b.end - a.end);
+                const downs = exons.filter(e => e.start > targetPos).sort((a, b) => a.start - b.start);
+                prevExon = ups[0] || null;
+                nextExon = downs[0] || null;
+            } else {
+                const ups = exons.filter(e => e.start > targetPos).sort((a, b) => a.start - b.start);
+                const downs = exons.filter(e => e.end < targetPos).sort((a, b) => b.end - a.end);
+                prevExon = ups[0] || null;
+                nextExon = downs[0] || null;
+            }
+        }
+
+        // Positions array strictly aligned in 5' -> 3' mRNA orientation
+        const positions = [];
+        if (!isAntisense) {
+            for (let p = winStart; p <= winEnd; p++) positions.push(p);
+        } else {
+            // Hebra reversa: 5' está en winEnd (coordenada genómica más alta)
+            for (let p = winEnd; p >= winStart; p--) positions.push(p);
+        }
+
+        // 1. Header Bar
+        const headerBar = document.createElement('div');
+        headerBar.className = 'franklin-header';
+        headerBar.innerHTML = `
+            <div class="franklin-pill">
+                Chr${chromosome}:${winStart.toLocaleString()}–${winEnd.toLocaleString()} (${model.strand}) 🔍
+            </div>
+            <div class="franklin-nav">
+                <button id="fNav-prevExon" class="btn-secondary" title="Saltar al Exón Anterior (${prevExon ? `Exón ${prevExon.exonNum}` : 'Inicio'})" ${!prevExon ? 'disabled style="opacity:0.5;"' : ''}>
+                    ⏮ ${prevExon ? `Exón ${prevExon.exonNum}` : 'Inicio'}
+                </button>
+                <button id="fNav-prev" class="btn-secondary" title="Desplazar 10 pb hacia el 5' (río arriba)">◄ −10 pb</button>
+                <button id="fNav-center" class="btn-secondary" title="Centrar en la posición de la variante">🎯 Centrar Variante</button>
+                <button id="fNav-next" class="btn-secondary" title="Desplazar 10 pb hacia el 3' (río abajo)">+10 pb ►</button>
+                <button id="fNav-nextExon" class="btn-secondary" title="Saltar al Próximo Exón (${nextExon ? `Exón ${nextExon.exonNum}` : 'Fin'})" ${!nextExon ? 'disabled style="opacity:0.5;"' : ''}>
+                    ${nextExon ? `Exón ${nextExon.exonNum}` : 'Fin'} ⏭
+                </button>
+            </div>
+            <div class="franklin-view-mode-toggle">
+                <button id="toggleWtMutBtn" class="btn-toggle-mode ${isShowingMutantView ? 'is-mut' : 'is-wt'}">
+                    ${isShowingMutantView ? '⚡ Mostrando: Variante Mutada' : '🧬 Mostrando: Secuencia Salvaje (WT)'}
+                </button>
+            </div>
+        `;
+        viewerWrapper.appendChild(headerBar);
+
+
+        const viewport = document.createElement('div');
+        viewport.className = 'franklin-viewport';
+
+        // Synchronized Inner Tracks Container to guarantee 1:1 pixel alignment across all columns
+        const innerTracks = document.createElement('div');
+        innerTracks.className = 'f-tracks-inner';
+        innerTracks.style.minWidth = `${windowLength * 30}px`;
+
+        // 2.1 Genomic Ruler Track
+        const rulerTrack = document.createElement('div');
+        rulerTrack.className = 'f-ruler-track';
+        rulerTrack.style.display = 'grid';
+        rulerTrack.style.gridTemplateColumns = `repeat(${windowLength}, minmax(30px, 1fr))`;
+
+        for (let i = 0; i < windowLength; i++) {
+            const p = positions[i];
+            const cell = document.createElement('div');
+            cell.className = 'f-ruler-cell';
+            if (p % 10 === 0 || i === 0 || i === windowLength - 1) {
+                cell.innerHTML = `
+                    <span class="f-tick">◆</span>
+                    <span class="f-pos">${p.toLocaleString()}</span>
+                `;
+            }
+            rulerTrack.appendChild(cell);
+        }
+        innerTracks.appendChild(rulerTrack);
+
+        function getExonAt(pos) {
+            return exons.find(e => pos >= e.start && pos <= e.end);
+        }
+
+        // 2.2 Region Header Track (Compact, non-distorting)
+        const regionHeaderTrack = document.createElement('div');
+        regionHeaderTrack.className = 'f-region-header-track';
+        regionHeaderTrack.style.display = 'grid';
+        regionHeaderTrack.style.gridTemplateColumns = `repeat(${windowLength}, minmax(30px, 1fr))`;
+
+        for (let i = 0; i < windowLength; ) {
+            const p = positions[i];
+            const curEx = getExonAt(p);
+            if (curEx) {
+                let spanLen = 0;
+                while (i + spanLen < windowLength && getExonAt(positions[i + spanLen])?.exonNum === curEx.exonNum) {
+                    spanLen++;
+                }
+                const box = document.createElement('div');
+                box.className = 'f-region-box is-exon';
+                box.style.gridColumn = `span ${spanLen}`;
+                box.innerHTML = `<span>[ Exón ${curEx.exonNum} ]</span>`;
+                box.title = `Exón ${curEx.exonNum} (${curEx.length.toLocaleString()} pb) [Chr${chromosome}:${curEx.start.toLocaleString()}–${curEx.end.toLocaleString()}]`;
+                regionHeaderTrack.appendChild(box);
+                i += spanLen;
+            } else {
+                const curIntr = introns.find(intron => p >= intron.start && p <= intron.end);
+                let spanLen = 0;
+                while (i + spanLen < windowLength && !getExonAt(positions[i + spanLen])) {
+                    spanLen++;
+                }
+                const box = document.createElement('div');
+                box.className = 'f-region-box is-intron';
+                box.style.gridColumn = `span ${spanLen}`;
+                box.innerHTML = `<span>[ Intrón ${curIntr ? curIntr.intronNum : ''} ]</span>`;
+                box.title = `Región Intrónica ${curIntr ? `[Intrón ${curIntr.intronNum}] (entre Exón ${curIntr.donorExon} y Exón ${curIntr.acceptorExon})` : ''}`;
+                regionHeaderTrack.appendChild(box);
+                i += spanLen;
+            }
+        }
+        innerTracks.appendChild(regionHeaderTrack);
+
+        // 2.3 Amino Acid & Chevron Track (Siempre en orientación biológica 5' -> 3' del ARNm)
+        const aaTrack = document.createElement('div');
+        aaTrack.className = 'f-aa-track';
+        aaTrack.style.display = 'grid';
+        aaTrack.style.gridTemplateColumns = `repeat(${windowLength}, minmax(30px, 1fr))`;
+
+        const refLen = Math.max(1, (variant.ref || 'N').length);
+        const varStart = variant.pos;
+        const varEnd = variant.pos + refLen - 1;
+
+        for (let i = 0; i < windowLength; ) {
+            const p = positions[i];
+            const currentExon = getExonAt(p);
+            
+            if (currentExon && currentExon.isCoding) {
+                const offsetInExon = isAntisense ? (currentExon.end - p) : (p - currentExon.start);
+                const phase = (offsetInExon + currentExon.phase) % 3;
+                const remainingBasesInThisExon = isAntisense ? (p - currentExon.start + 1) : (currentExon.end - p + 1);
+
+                if (phase === 0) {
+                    if (remainingBasesInThisExon >= 3 && i + 2 < windowLength) {
+                        let codonBases = "";
+                        for (let c = 0; c < 3; c++) {
+                            const posC = positions[i + c];
+                            let baseC = (realSequence[posC - winStart] || 'N').toUpperCase();
+                            if (isAntisense) baseC = reverseComplement(baseC);
+                            
+                            // Si la variante solapa esta base en vista mutada
+                            if (isShowingMutantView && posC >= varStart && posC <= varEnd) {
+                                const varOff = isAntisense ? (varEnd - posC) : (posC - varStart);
+                                const senseAlt = isAntisense ? reverseComplement(variant.alt) : variant.alt;
+                                baseC = senseAlt[varOff] || baseC;
+                            }
+                            codonBases += baseC;
+                        }
+
+                        const aa = CODON_TABLE[codonBases] || 'X';
+                        const aa3 = aa1to3(aa);
+
+                        const chevron = document.createElement('div');
+                        chevron.className = `f-aa-chevron ${aa === '*' ? 'is-stop' : ''}`;
+                        chevron.style.gridColumn = 'span 3';
+                        chevron.innerHTML = `<span>${aa === '*' ? 'Stop' : aa3}</span>`;
+                        chevron.title = `Codón ${codonBases} → ${aaFullName(aa)} (${aa3}) [5'➔3' ARNm]`;
+                        aaTrack.appendChild(chevron);
+                        i += 3;
+                    } else if (remainingBasesInThisExon < 3) {
+                        const splitCount = remainingBasesInThisExon;
+                        const actualSpan = Math.min(splitCount, windowLength - i);
+                        if (actualSpan <= 0) break;
+
+                        let splitInfo = null;
+                        try {
+                            splitInfo = await getSplitCodonInfo(currentExon, exons, chromosome);
+                        } catch (e) {
+                            console.warn("Split codon lookup notice:", e);
+                        }
+
+                        const splitEl = document.createElement('div');
+                        splitEl.className = 'f-aa-split';
+                        splitEl.style.gridColumn = `span ${actualSpan}`;
+
+                        if (splitInfo) {
+                            splitEl.innerHTML = `<span>[${splitInfo.aa3} ${splitCount}/3 ➔]</span>`;
+                            splitEl.title = `Codón dividido en límite de Exón ${currentExon.exonNum}:\n${splitInfo.tailSeq} (Exón ${splitInfo.currentExonNum}) + ${splitInfo.headSeq} (Exón ${splitInfo.nextExonNum}) = ${splitInfo.fullCodon} → ${splitInfo.name} (${splitInfo.aa3})`;
+                        } else {
+                            splitEl.innerHTML = `<span>[Fase ${splitCount}/3 ➔]</span>`;
+                            splitEl.title = `Codón dividido en límite de Exón ${currentExon.exonNum}: ${splitCount} nt (se completa en el siguiente exón)`;
+                        }
+
+                        aaTrack.appendChild(splitEl);
+                        i += actualSpan;
                     } else {
-                        splitEl.innerHTML = `<span>[Fase ${splitCount}/3 ➔]</span>`;
-                        splitEl.title = `Codón dividido en límite de Exón ${currentExon.exonNum}: ${splitCount} nt (se completa en el siguiente exón)`;
+                        const partialSpan = windowLength - i;
+                        const partCell = document.createElement('div');
+                        partCell.className = 'f-aa-partial';
+                        partCell.style.gridColumn = `span ${partialSpan}`;
+                        partCell.innerHTML = `<span>...</span>`;
+                        aaTrack.appendChild(partCell);
+                        i += partialSpan;
                     }
-
-                    aaTrack.appendChild(splitEl);
-                    p += splitCount;
                 } else {
-                    const partialSpan = winEnd - p + 1;
-                    const partCell = document.createElement('div');
-                    partCell.className = 'f-aa-partial';
-                    partCell.style.gridColumn = `span ${partialSpan}`;
-                    partCell.innerHTML = `<span>...</span>`;
-                    aaTrack.appendChild(partCell);
-                    p += partialSpan;
+                    const midCell = document.createElement('div');
+                    midCell.className = 'f-aa-mid';
+                    aaTrack.appendChild(midCell);
+                    i++;
+                }
+            } else if (!currentExon) {
+                const intronCell = document.createElement('div');
+                intronCell.className = 'f-intron-cell';
+                intronCell.textContent = (i % 3 === 0) ? '►' : '';
+                aaTrack.appendChild(intronCell);
+                i++;
+            } else {
+                const utrCell = document.createElement('div');
+                utrCell.className = 'f-utr-cell';
+                aaTrack.appendChild(utrCell);
+                i++;
+            }
+        }
+        innerTracks.appendChild(aaTrack);
+
+        // 2.4 Base Letters Track (Con soporte de hebra sense 5' -> 3')
+        const baseTrack = document.createElement('div');
+        baseTrack.className = 'f-base-track';
+        baseTrack.style.display = 'grid';
+        baseTrack.style.gridTemplateColumns = `repeat(${windowLength}, minmax(30px, 1fr))`;
+
+        const senseRefStr = isAntisense ? reverseComplement(variant.ref) : variant.ref;
+        const senseAltStr = isAntisense ? reverseComplement(variant.alt) : variant.alt;
+
+        for (let i = 0; i < windowLength; i++) {
+            const p = positions[i];
+            let baseLetter = (realSequence[p - winStart] || 'N').toUpperCase();
+            if (isAntisense) baseLetter = reverseComplement(baseLetter);
+
+            const isWithinVariant = (p >= varStart && p <= varEnd);
+
+            const baseCell = document.createElement('div');
+            baseCell.className = `f-base-cell ${isWithinVariant ? 'is-variant-pos' : ''}`;
+
+            if (isWithinVariant) {
+                const offset = isAntisense ? (varEnd - p) : (p - varStart);
+                if (isShowingMutantView) {
+                    baseCell.classList.add('is-variant-mut-span');
+                    if (senseRefStr.length > senseAltStr.length) {
+                        // Deleción
+                        if (offset < senseAltStr.length) {
+                            const altChar = senseAltStr[offset];
+                            baseCell.innerHTML = `<span class="f-variant-badge mut-badge" title="Variante mutada (${senseRefStr} > ${senseAltStr}) [Base ${offset + 1}]: ${altChar}">${altChar}</span>`;
+                        } else {
+                            const delChar = senseRefStr[offset] || baseLetter;
+                            baseCell.innerHTML = `<span class="f-variant-badge del-badge" title="Base WT eliminada por deleción: ${delChar} en Chr${chromosome}:${p}">−</span>`;
+                        }
+                    } else if (senseRefStr.length < senseAltStr.length) {
+                        // Inserción
+                        if (offset === 0) {
+                            baseCell.innerHTML = `<span class="f-variant-badge ins-badge" title="Inserción en Chr${chromosome}:${p}: ${senseRefStr} > ${senseAltStr}">+${senseAltStr.slice(senseRefStr.length)}</span>`;
+                        } else {
+                            baseCell.innerHTML = `<span class="f-variant-badge mut-badge" title="Inserción">+</span>`;
+                        }
+                    } else {
+                        // Sustitución
+                        const altChar = senseAltStr[offset] || senseAltStr;
+                        baseCell.innerHTML = `<span class="f-variant-badge mut-badge" title="Variante Mutada: ${senseRefStr[offset] || senseRefStr} > ${altChar} en Chr${chromosome}:${p}">${altChar}</span>`;
+                    }
+                } else {
+                    // Vista WT: Resaltar todas las bases del alelo de referencia
+                    baseCell.classList.add('is-variant-wt-span');
+                    const wtChar = (senseRefStr && senseRefStr !== 'N' && offset < senseRefStr.length) ? senseRefStr[offset] : baseLetter;
+                    baseCell.innerHTML = `<span class="f-variant-badge wt-badge" title="Base WT implicada en la variante (${senseRefStr} > ${senseAltStr}) [Locus Chr${chromosome}:${p}, base ${offset + 1} de ${senseRefStr.length}]: ${wtChar}">${wtChar}</span>`;
                 }
             } else {
-                const midCell = document.createElement('div');
-                midCell.className = 'f-aa-mid';
-                aaTrack.appendChild(midCell);
-                p++;
+                const color = BASE_COLORS[baseLetter] || BASE_COLORS['N'];
+                baseCell.innerHTML = `<span class="f-base" style="color: ${color};">${baseLetter}</span>`;
+                baseCell.title = `Chr${chromosome}:${p} = ${baseLetter}${isAntisense ? ' (Sense 5\'➔3\')' : ''}`;
             }
-        } else if (!currentExon) {
-            const intronCell = document.createElement('div');
-            intronCell.className = 'f-intron-cell';
-            intronCell.textContent = (p % 3 === 0) ? '►' : '';
-            aaTrack.appendChild(intronCell);
-            p++;
-        } else {
-            const utrCell = document.createElement('div');
-            utrCell.className = 'f-utr-cell';
-            aaTrack.appendChild(utrCell);
-            p++;
+
+            baseTrack.appendChild(baseCell);
         }
-    }
-    viewport.appendChild(aaTrack);
+        innerTracks.appendChild(baseTrack);
 
-    // 2.4 Base Letters Track
-    const baseTrack = document.createElement('div');
-    baseTrack.className = 'f-base-track';
-    baseTrack.style.display = 'grid';
-    baseTrack.style.gridTemplateColumns = `repeat(${windowLength}, minmax(0, 1fr))`;
+        // 2.5 Splice Junction Demarcation Lines
+        const junctionsInWindow = [];
+        exons.forEach(ex => {
+            if (ex.end >= winStart && ex.end <= winEnd) {
+                junctionsInWindow.push({ pos: ex.end, type: isAntisense ? 'acceptor' : 'donor', exonNum: ex.exonNum });
+            }
+            if (ex.start >= winStart && ex.start <= winEnd) {
+                junctionsInWindow.push({ pos: ex.start, type: isAntisense ? 'donor' : 'acceptor', exonNum: ex.exonNum });
+            }
+        });
 
-    const refLen = Math.max(1, (variant.ref || 'N').length);
-    const varStart = variant.pos;
-    const varEnd = variant.pos + refLen - 1;
-
-    for (let p = winStart; p <= winEnd; p++) {
-        const seqIdx = p - winStart;
-        let baseLetter = (realSequence[seqIdx] || 'N').toUpperCase();
-        const isWithinVariant = (p >= varStart && p <= varEnd);
-
-        const baseCell = document.createElement('div');
-        baseCell.className = `f-base-cell ${isWithinVariant ? 'is-variant-pos' : ''}`;
-
-        if (isWithinVariant) {
-            const offset = p - varStart;
-            if (isShowingMutantView) {
-                baseCell.classList.add('is-variant-mut-span');
-                if (variant.ref.length > variant.alt.length) {
-                    // Deletion (e.g. CT > C: offset 0 is C, offset 1 is deleted)
-                    if (offset < variant.alt.length) {
-                        const altChar = variant.alt[offset];
-                        baseCell.innerHTML = `<span class="f-variant-badge mut-badge" title="Variante mutada (${variant.ref} > ${variant.alt}) [Base ${offset + 1}]: ${altChar}">${altChar}</span>`;
-                    } else {
-                        const delChar = variant.ref[offset] || baseLetter;
-                        baseCell.innerHTML = `<span class="f-variant-badge del-badge" title="Base WT eliminada por deleción: ${delChar} en Chr${chromosome}:${p}">−</span>`;
-                    }
-                } else if (variant.ref.length < variant.alt.length) {
-                    // Insertion (e.g. A > AGAGAG)
-                    if (offset === 0) {
-                        baseCell.innerHTML = `<span class="f-variant-badge ins-badge" title="Inserción en Chr${chromosome}:${p}: ${variant.ref} > ${variant.alt}">+${variant.alt.slice(variant.ref.length)}</span>`;
-                    } else {
-                        baseCell.innerHTML = `<span class="f-variant-badge mut-badge" title="Inserción">+</span>`;
-                    }
-                } else {
-                    // Substitution (e.g. C > T)
-                    const altChar = variant.alt[offset] || variant.alt;
-                    baseCell.innerHTML = `<span class="f-variant-badge mut-badge" title="Variante Mutada: ${variant.ref[offset] || variant.ref} > ${altChar} en Chr${chromosome}:${p}">${altChar}</span>`;
-                }
+        junctionsInWindow.forEach(j => {
+            let jCol = -1;
+            if (!isAntisense) {
+                jCol = j.pos - winStart;
             } else {
-                // WT view: highlight EVERY reference base implicated in the variant!
-                baseCell.classList.add('is-variant-wt-span');
-                const wtChar = (variant.ref && variant.ref !== 'N' && offset < variant.ref.length) ? variant.ref[offset] : baseLetter;
-                baseCell.innerHTML = `<span class="f-variant-badge wt-badge" title="Base WT implicada en la variante (${variant.ref} > ${variant.alt}) [Locus Chr${chromosome}:${p}, base ${offset + 1} de ${variant.ref.length}]: ${wtChar}">${wtChar}</span>`;
+                jCol = winEnd - j.pos;
             }
-        } else {
-            const color = BASE_COLORS[baseLetter] || BASE_COLORS['N'];
-            baseCell.innerHTML = `<span class="f-base" style="color: ${color};">${baseLetter}</span>`;
-            baseCell.title = `Chr${chromosome}:${p} = ${baseLetter}`;
+            if (jCol >= 0 && jCol < windowLength) {
+                const line = document.createElement('div');
+                line.className = 'f-junction-line';
+                line.style.left = `calc(${((jCol + 1) / windowLength) * 100}% - 1px)`;
+                line.title = j.type === 'donor' 
+                    ? `Límite Exón ${j.exonNum} / Intrón (Dador)`
+                    : `Límite Intrón / Exón ${j.exonNum} (Aceptor)`;
+                innerTracks.appendChild(line);
+            }
+        });
+
+        // 2.6 Variant Marker Line / Area (spans all affected reference positions)
+        if (varEnd >= winStart && varStart <= winEnd) {
+            let startCol, endCol;
+            if (!isAntisense) {
+                startCol = Math.max(0, varStart - winStart);
+                endCol = Math.min(windowLength - 1, varEnd - winStart);
+            } else {
+                startCol = Math.max(0, winEnd - varEnd);
+                endCol = Math.min(windowLength - 1, winEnd - varStart);
+            }
+            const spanBases = endCol - startCol + 1;
+            const vLine = document.createElement('div');
+            vLine.className = 'f-variant-marker-line';
+            vLine.style.left = `calc(${((startCol) / windowLength) * 100}%)`;
+            vLine.style.width = `calc(${((spanBases) / windowLength) * 100}%)`;
+            vLine.title = `Locus de la variante: Chr${chromosome}:${varStart}${refLen > 1 ? `–${varEnd}` : ''} (${variant.ref} > ${variant.alt})`;
+            innerTracks.appendChild(vLine);
         }
 
-        baseTrack.appendChild(baseCell);
-    }
-    viewport.appendChild(baseTrack);
+        viewport.appendChild(innerTracks);
+        viewerWrapper.appendChild(viewport);
+        container.appendChild(viewerWrapper);
 
-    // 2.5 Splice Junction Demarcation Lines (Tarea 1: Sin texto ruidoso 'f-junction-badge', solo línea divisoria limpia)
-    junctionsInWindow.forEach(j => {
-        const jIdx = j.pos - winStart;
-        if (jIdx >= 0 && jIdx < windowLength) {
-            const line = document.createElement('div');
-            line.className = 'f-junction-line';
-            line.style.left = `calc(${((jIdx + 1) / windowLength) * 100}% - 1px)`;
-            line.title = j.type === 'donor' 
-                ? `Límite Exón ${j.exonNum} / Intrón (Dador)`
-                : `Límite Intrón / Exón ${j.exonNum} (Aceptor)`;
-            viewport.appendChild(line);
+        // Event Listeners for Nav buttons
+        const navPrevExon = viewerWrapper.querySelector('#fNav-prevExon');
+        const navPrev = viewerWrapper.querySelector('#fNav-prev');
+        const navCenter = viewerWrapper.querySelector('#fNav-center');
+        const navNext = viewerWrapper.querySelector('#fNav-next');
+        const navNextExon = viewerWrapper.querySelector('#fNav-nextExon');
+        const toggleWtMutBtn = viewerWrapper.querySelector('#toggleWtMutBtn');
+
+        if (navPrevExon && prevExon) {
+            navPrevExon.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const jumpPos = isAntisense ? prevExon.end : prevExon.start;
+                renderFranklinBaseViewer(container, model, jumpPos);
+            });
         }
-    });
 
-    // 2.6 Variant Marker Line / Area (spans all affected reference positions)
-    if (varEnd >= winStart && varStart <= winEnd) {
-        const startIdx = Math.max(0, varStart - winStart);
-        const endIdx = Math.min(windowLength - 1, varEnd - winStart);
-        const spanBases = endIdx - startIdx + 1;
-        const vLine = document.createElement('div');
-        vLine.className = 'f-variant-marker-line';
-        vLine.style.left = `calc(${((startIdx) / windowLength) * 100}%)`;
-        vLine.style.width = `calc(${((spanBases) / windowLength) * 100}%)`;
-        vLine.title = `Locus de la variante: Chr${chromosome}:${varStart}${refLen > 1 ? `–${varEnd}` : ''} (${variant.ref} > ${variant.alt})`;
-        viewport.appendChild(vLine);
-    }
+        if (navPrev) {
+            navPrev.addEventListener('click', (e) => {
+                e.stopPropagation();
+                // Desplazar 10 pb hacia el 5' (río arriba)
+                const delta = isAntisense ? 10 : -10;
+                renderFranklinBaseViewer(container, model, Math.max(1, targetPos + delta));
+            });
+        }
 
-    viewerWrapper.appendChild(viewport);
+        if (navCenter) {
+            navCenter.addEventListener('click', (e) => {
+                e.stopPropagation();
+                renderFranklinBaseViewer(container, model, variant.pos);
+            });
+        }
 
-    container.appendChild(viewerWrapper);
+        if (navNext) {
+            navNext.addEventListener('click', (e) => {
+                e.stopPropagation();
+                // Desplazar 10 pb hacia el 3' (río abajo)
+                const delta = isAntisense ? -10 : 10;
+                renderFranklinBaseViewer(container, model, targetPos + delta);
+            });
+        }
 
-    // Event Listeners for Nav buttons (Fix exact center navigation)
-    const navPrevExon = viewerWrapper.querySelector('#fNav-prevExon');
-    const navPrev = viewerWrapper.querySelector('#fNav-prev');
-    const navCenter = viewerWrapper.querySelector('#fNav-center');
-    const navNext = viewerWrapper.querySelector('#fNav-next');
-    const navNextExon = viewerWrapper.querySelector('#fNav-nextExon');
-    const toggleWtMutBtn = viewerWrapper.querySelector('#toggleWtMutBtn');
+        if (navNextExon && nextExon) {
+            navNextExon.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const jumpPos = isAntisense ? nextExon.end : nextExon.start;
+                renderFranklinBaseViewer(container, model, jumpPos);
+            });
+        }
 
-    if (navPrevExon && prevExon) {
-        navPrevExon.addEventListener('click', (e) => {
-            e.stopPropagation();
-            renderFranklinBaseViewer(container, model, prevExon.start);
-        });
-    }
-
-    if (navPrev) {
-        navPrev.addEventListener('click', (e) => {
-            e.stopPropagation();
-            renderFranklinBaseViewer(container, model, Math.max(1, targetPos - 10));
-        });
-    }
-
-    if (navCenter) {
-        navCenter.addEventListener('click', (e) => {
-            e.stopPropagation();
-            renderFranklinBaseViewer(container, model, variant.pos);
-        });
-    }
-
-    if (navNext) {
-        navNext.addEventListener('click', (e) => {
-            e.stopPropagation();
-            renderFranklinBaseViewer(container, model, targetPos + 10);
-        });
-    }
-
-    if (navNextExon && nextExon) {
-        navNextExon.addEventListener('click', (e) => {
-            e.stopPropagation();
-            renderFranklinBaseViewer(container, model, nextExon.start);
-        });
-    }
-
-    if (toggleWtMutBtn) {
-        toggleWtMutBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            renderFranklinBaseViewer(container, model, targetPos, !isShowingMutantView);
-        });
+        if (toggleWtMutBtn) {
+            toggleWtMutBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                renderFranklinBaseViewer(container, model, targetPos, !isShowingMutantView);
+            });
+        }
+    } catch (err) {
+        console.error("Error en renderFranklinBaseViewer:", err);
+        container.innerHTML = `
+            <div class="nmd-decision-box trigger-nmd" style="margin: 12px 0;">
+                <div class="nmd-title"><span>⚠️ No se pudo renderizar el visor micro de bases:</span></div>
+                <p class="nmd-description">${err.message || 'Error inesperado al generar las pistas de secuencia.'}</p>
+            </div>
+        `;
     }
 }
 
@@ -1497,6 +1589,198 @@ export function renderComparisonSplicingViewer(containerEl, {
     containerEl.appendChild(wrap);
 }
 
+/**
+ * Asynchronously populates the SpliceAI Oracle Predictive Card
+ */
+async function populateSpliceAIOracle(cardElement, model) {
+    const contentArea = cardElement.querySelector('#spliceaiContentArea');
+    const badge = cardElement.querySelector('#spliceaiStatusBadge');
+    if (!contentArea) return;
+
+    try {
+        const pred = await fetchSpliceAIPrediction(model.chromosome, model.variant.pos, model.variant.ref, model.variant.alt);
+        if (!pred || !pred.available) {
+            if (badge) {
+                badge.className = 'badge badge-neutral';
+                badge.textContent = 'Sin datos precalculados';
+            }
+            contentArea.innerHTML = `
+                <div style="font-size: 0.88rem; color: var(--text-secondary); line-height: 1.5; padding: 4px 0;">
+                    ℹ️ <em>No se encontraron puntajes precalculados de SpliceAI en GeneBE para esta coordenada genómica. Puedes continuar evaluando los escenarios de splicing mecánicos a continuación.</em>
+                </div>
+            `;
+            return;
+        }
+
+        if (badge) {
+            badge.className = `badge ${pred.recommendation?.badgeClass || 'badge-neutral'}`;
+            badge.textContent = pred.recommendation?.badge || `Max DS: ${pred.maxScore.toFixed(2)}`;
+        }
+
+        const getMetricThresholdClass = (val) => {
+            if (val >= 0.8) return 'threshold-very-high';
+            if (val >= 0.5) return 'threshold-high';
+            if (val >= 0.2) return 'threshold-suspect';
+            return 'threshold-low';
+        };
+
+        const getMetricConfidenceBadge = (val) => {
+            if (val >= 0.8) return '<span class="badge badge-danger" style="font-size:0.75rem;">Muy Alto (≥ 0.80)</span>';
+            if (val >= 0.5) return '<span class="badge badge-warning" style="font-size:0.75rem;">Alto (≥ 0.50)</span>';
+            if (val >= 0.2) return '<span class="badge badge-info" style="font-size:0.75rem;">Sospechoso (≥ 0.20)</span>';
+            return '<span class="badge badge-neutral" style="font-size:0.75rem;">Bajo (&lt; 0.20)</span>';
+        };
+
+        const formatDp = (dp) => (dp > 0 ? `+${dp} pb` : `${dp} pb`);
+        const isLoss = pred.recommendation?.action === 'loss';
+        const isGain = pred.recommendation?.action === 'gain';
+
+        const rows = [
+            {
+                name: 'Aceptor Gain (AG)',
+                score: pred.ds_ag,
+                dp: pred.dp_ag,
+                effect: 'Ganancia de aceptor críptico (elongación / inclusión aberrante)'
+            },
+            {
+                name: 'Aceptor Loss (AL)',
+                score: pred.ds_al,
+                dp: pred.dp_al,
+                effect: 'Pérdida de aceptor canónico (salto de exón o retención)'
+            },
+            {
+                name: 'Donor Gain (DG)',
+                score: pred.ds_dg,
+                dp: pred.dp_dg,
+                effect: 'Ganancia de dador críptico (truncamiento / uso alternativo)'
+            },
+            {
+                name: 'Donor Loss (DL)',
+                score: pred.ds_dl,
+                dp: pred.dp_dl,
+                effect: 'Pérdida de dador canónico (salto de exón o retención)'
+            }
+        ];
+
+        const tableRowsHtml = rows.map(r => {
+            const isSignificant = r.score >= 0.2;
+            const rowStyle = isSignificant ? 'style="background: rgba(244, 63, 94, 0.06); font-weight: 600;"' : '';
+            return `
+                <tr ${rowStyle}>
+                    <td>
+                        <strong style="color: var(--text-primary); font-size: 0.88rem;">${r.name}</strong>
+                    </td>
+                    <td>
+                        <span class="spliceai-score-pill ${getMetricThresholdClass(r.score)}">
+                            ${r.score.toFixed(3)}
+                        </span>
+                    </td>
+                    <td style="font-family: var(--font-mono); font-size: 0.88rem; font-weight: 700; color: var(--text-primary);">
+                        ${formatDp(r.dp)}
+                    </td>
+                    <td>
+                        ${getMetricConfidenceBadge(r.score)}
+                    </td>
+                    <td style="font-size: 0.84rem; color: var(--text-secondary); line-height: 1.4;">
+                        ${r.effect}
+                    </td>
+                </tr>
+            `;
+        }).join('');
+
+        contentArea.innerHTML = `
+            <div class="spliceai-table-wrapper">
+                <table class="spliceai-table">
+                    <thead>
+                        <tr>
+                            <th>Evento</th>
+                            <th>Delta Score (DS)</th>
+                            <th>Delta Posición (DP)</th>
+                            <th>Nivel de Confianza</th>
+                            <th>Consecuencia Prevista</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${tableRowsHtml}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="spliceai-recommendation-box ${isLoss ? 'is-loss' : (isGain ? 'is-gain' : '')}">
+                <div class="spliceai-recommendation-title">
+                    ${pred.recommendation?.title || 'Evaluación de Splicing'}
+                </div>
+                <p class="spliceai-recommendation-text">
+                    ${pred.recommendation?.text || ''}
+                </p>
+                ${isLoss ? `
+                    <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+                        <button id="btnOracleGoScenario1" class="btn-secondary" style="padding: 6px 14px; font-size: 0.82rem; cursor: pointer;">
+                            Simular Escenario 1 (Salto de Exón)
+                        </button>
+                        <button id="btnOracleGoScenario3" class="btn-secondary" style="padding: 6px 14px; font-size: 0.82rem; cursor: pointer;">
+                            Simular Escenario 3 (Retención de Intrón)
+                        </button>
+                    </div>
+                ` : ''}
+                ${isGain ? `
+                    <div style="margin-top: 12px;">
+                        <button id="btnOracleApplyCryptic" class="btn-secondary" style="padding: 6px 14px; font-size: 0.82rem; cursor: pointer;">
+                            Configurar Escenario 2 con Δ = ${pred.recommendation?.deltaPos || 4} pb
+                        </button>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+
+        // Wire quick action buttons
+        const btnGoS1 = contentArea.querySelector('#btnOracleGoScenario1');
+        if (btnGoS1) {
+            btnGoS1.addEventListener('click', () => {
+                const tabS1 = document.getElementById('tabScenario1');
+                if (tabS1) tabS1.click();
+                const btnRecalcS1 = document.getElementById('btnRecalcScenario1');
+                if (btnRecalcS1) btnRecalcS1.click();
+            });
+        }
+
+        const btnGoS3 = contentArea.querySelector('#btnOracleGoScenario3');
+        if (btnGoS3) {
+            btnGoS3.addEventListener('click', () => {
+                const tabS3 = document.getElementById('tabScenario3');
+                if (tabS3) tabS3.click();
+                const btnRecalcS3 = document.getElementById('btnRecalcScenario3');
+                if (btnRecalcS3) btnRecalcS3.click();
+            });
+        }
+
+        const btnApplyCryptic = contentArea.querySelector('#btnOracleApplyCryptic');
+        if (btnApplyCryptic) {
+            btnApplyCryptic.addEventListener('click', () => {
+                const tabS2 = document.getElementById('tabScenario2');
+                if (tabS2) tabS2.click();
+                const deltaInput = document.getElementById('crypticDeltaInput');
+                const locSelect = document.getElementById('crypticLocationType');
+                const dp = pred.recommendation?.deltaPos || 4;
+                if (deltaInput) deltaInput.value = Math.abs(dp);
+                if (locSelect) locSelect.value = dp > 0 ? 'intron' : 'exon';
+                const btnRecalcS2 = document.getElementById('btnRecalcScenario2');
+                if (btnRecalcS2) btnRecalcS2.click();
+            });
+        }
+
+    } catch (err) {
+        console.warn("Error rendering SpliceAI Oracle card:", err);
+        if (contentArea) {
+            contentArea.innerHTML = `
+                <div style="font-size: 0.85rem; color: var(--text-muted);">
+                    ℹ️ SpliceAI no disponible temporalmente en GeneBE. Puedes continuar con la simulación interactiva abajo.
+                </div>
+            `;
+        }
+    }
+}
+
 export function renderConsequenceSimulator(container, model) {
     if (!container || !model) return;
     container.innerHTML = '';
@@ -1524,6 +1808,21 @@ export function renderConsequenceSimulator(container, model) {
             </div>
 
             <div class="sim-body" style="margin-top: 16px;">
+                <!-- ═══════ ORÁCULO PREDICTIVO SPLICEAI (GENEBE) ═══════ -->
+                <div class="spliceai-oracle-card" id="spliceaiOracleCard">
+                    <div class="spliceai-oracle-header">
+                        <div class="spliceai-oracle-title">
+                            <span>Predicción SpliceAI</span>
+                            <span id="spliceaiStatusBadge" class="badge badge-neutral">Consultando...</span>
+                        </div>
+                    </div>
+                    <div id="spliceaiContentArea">
+                        <div style="display:flex; align-items:center; gap:10px; color:var(--text-secondary); font-size:0.9rem; padding:12px 0;">
+                            <span class="calc-spinner">⏳</span> Cargando predicciones de SpliceAI...
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Scenario Selector Tabs -->
                 <div class="splicing-scenario-tabs">
                     <button class="scenario-tab-btn" id="tabScenario1" data-scenario="1">
@@ -1658,6 +1957,21 @@ export function renderConsequenceSimulator(container, model) {
             </div>
 
             <div class="sim-body">
+                <!-- SpliceAI card also available for exonic variants to detect exonic cryptic activation or splice disruption -->
+                <div class="spliceai-oracle-card" id="spliceaiOracleCard">
+                    <div class="spliceai-oracle-header">
+                        <div class="spliceai-oracle-title">
+                            <span>Predicción SpliceAI</span>
+                            <span id="spliceaiStatusBadge" class="badge badge-neutral">Consultando...</span>
+                        </div>
+                    </div>
+                    <div id="spliceaiContentArea">
+                        <div style="display:flex; align-items:center; gap:10px; color:var(--text-secondary); font-size:0.9rem; padding:12px 0;">
+                            <span class="calc-spinner">⏳</span> Cargando predicciones de SpliceAI...
+                        </div>
+                    </div>
+                </div>
+
                 <div style="margin-bottom: 14px;">
                     <button id="btnRunFrameshiftModule" class="btn-primary" style="padding: 12px 24px;">
                         ⚡ Calcular Desplazamiento del Marco y Visualizar Nuevos Aminoácidos
@@ -1679,6 +1993,9 @@ export function renderConsequenceSimulator(container, model) {
     }
 
     container.appendChild(card);
+
+    // Asynchronously populate SpliceAI Oracle Card
+    populateSpliceAIOracle(card, model);
 
     // ─── EVENT HANDLERS AND DUAL VIEWERS FOR SPLICING ───
     if (isSplicing) {
@@ -1709,7 +2026,7 @@ export function renderConsequenceSimulator(container, model) {
             }
         });
 
-        // Scenario 1: Exon Skipping Dual Comparison (Tarea 2)
+        // Scenario 1: Exon Skipping Dual Comparison (with 5' -> 3' strand -1 support)
         let selectedExonNum = affectedExonNum;
         card.querySelectorAll('#scenario1ExonChips .exon-chip-btn').forEach(chip => {
             chip.addEventListener('click', () => {
@@ -1726,7 +2043,7 @@ export function renderConsequenceSimulator(container, model) {
         if (btnS1 && resS1) {
             btnS1.addEventListener('click', async () => {
                 btnS1.disabled = true;
-                btnS1.innerHTML = '<span class="calc-spinner">⏳ Calculando...</span>';
+                btnS1.innerHTML = '<span class="calc-spinner">⏳ Cargando secuencias...</span>';
                 if (viewerS1) viewerS1.innerHTML = '';
 
                 let targetIdx = exons.findIndex(e => e.exonNum === selectedExonNum);
@@ -1750,27 +2067,27 @@ export function renderConsequenceSimulator(container, model) {
 
                 if (prevEx) {
                     const tailInfo = getCodonAlignedExonTail(prevEx, 15);
-                    const fetchedUp = await fetchRegionSequence(chromosome, tailInfo.start, tailInfo.end);
+                    const fetchedUp = await fetchExonSegment5to3(chromosome, tailInfo, model.strandNumeric);
                     if (fetchedUp) seqPrev = fetchedUp;
                     seqPrevPhase = tailInfo.phase; // 0
                 }
 
                 if (targetEx) {
                     const headInfo = getCodonAlignedExonHead(targetEx, 15);
-                    const fetchTarget = await fetchRegionSequence(chromosome, headInfo.start, headInfo.end);
+                    const fetchTarget = await fetchExonSegment5to3(chromosome, headInfo, model.strandNumeric);
                     if (fetchTarget) seqTarget = fetchTarget;
                     seqTargetPhase = headInfo.phase;
 
                     if (skippedLen > 30) {
                         const tailInfo = getCodonAlignedExonTail(targetEx, 15);
-                        const fetchTargetTail = await fetchRegionSequence(chromosome, tailInfo.start, tailInfo.end);
+                        const fetchTargetTail = await fetchExonSegment5to3(chromosome, tailInfo, model.strandNumeric);
                         if (fetchTargetTail) seqTargetTail = fetchTargetTail;
                     }
                 }
 
                 if (nextEx) {
                     const headInfo = getCodonAlignedExonHead(nextEx, 15);
-                    const fetchedDown = await fetchRegionSequence(chromosome, headInfo.start, headInfo.end);
+                    const fetchedDown = await fetchExonSegment5to3(chromosome, headInfo, model.strandNumeric);
                     if (fetchedDown) seqNext = fetchedDown;
                     seqNextPhase = headInfo.phase;
                 }
@@ -1818,7 +2135,7 @@ export function renderConsequenceSimulator(container, model) {
             });
         }
 
-        // Scenario 2: Cryptic Site Dual Comparison (Tarea 3 con Variante incorporada)
+        // Scenario 2: Cryptic Site Dual Comparison (with strand -1 biological orientation)
         const crypticLoc = card.querySelector('#crypticLocationType');
         const crypticDelta = card.querySelector('#crypticDeltaInput');
         const crypticPresets = card.querySelector('#crypticPresets');
@@ -1837,13 +2154,14 @@ export function renderConsequenceSimulator(container, model) {
         if (btnS2 && resS2) {
             btnS2.addEventListener('click', async () => {
                 btnS2.disabled = true;
-                btnS2.innerHTML = '<span class="calc-spinner">⏳ Calculando...</span>';
+                btnS2.innerHTML = '<span class="calc-spinner">⏳ Cargando secuencias...</span>';
                 if (viewerS2) viewerS2.innerHTML = '';
 
                 const delta = parseInt(crypticDelta.value, 10) || 4;
                 const isIntron = crypticLoc.value === 'intron';
                 const inFrame = (delta % 3 === 0);
                 const shift = delta % 3;
+                const isAntisense = (model.strandNumeric === -1);
 
                 let seqUpstream = 'CAGTACCAGTTGAC';
                 let seqDownstream = 'TTAGCTGAATTGGAC';
@@ -1857,38 +2175,61 @@ export function renderConsequenceSimulator(container, model) {
 
                 if (donorEx) {
                     const tailInfo = getCodonAlignedExonTail(donorEx, 15);
-                    const fetchedUp = await fetchRegionSequence(chromosome, tailInfo.start, tailInfo.end);
+                    const fetchedUp = await fetchExonSegment5to3(chromosome, tailInfo, model.strandNumeric);
                     if (fetchedUp) seqUpstream = fetchedUp;
                     seqPrevPhase = tailInfo.phase; // 0
 
                     if (isIntron) {
-                        const intronStart = donorEx.end + 1;
-                        let realChunk = await fetchRegionSequence(chromosome, intronStart, intronStart + delta - 1);
-                        if (!realChunk || realChunk.length === 0) {
-                            realChunk = "GTAAGTTCCAGTGAC".substring(0, delta);
-                        }
-                        
-                        // Check if variant is inside the incorporated intron chunk
-                        if (variant.pos >= intronStart && variant.pos < intronStart + delta) {
-                            const chunkOffset = variant.pos - intronStart;
-                            const arr = realChunk.split('');
-                            arr[chunkOffset] = variant.alt;
-                            realChunk = arr.join('');
-                            variantPosIndex = seqUpstream.length + chunkOffset;
+                        let realChunk = "";
+                        if (!isAntisense) {
+                            const intronStart = donorEx.end + 1;
+                            const intronEnd = intronStart + delta - 1;
+                            let raw = await fetchRegionSequence(chromosome, intronStart, intronEnd);
+                            if (!raw || raw.length === 0) raw = "GTAAGTTCCAGTGAC".substring(0, delta);
+
+                            if (variant.pos >= intronStart && variant.pos <= intronEnd) {
+                                const chunkOffset = variant.pos - intronStart;
+                                const arr = raw.split('');
+                                arr[chunkOffset] = variant.alt;
+                                raw = arr.join('');
+                                variantPosIndex = seqUpstream.length + chunkOffset;
+                            }
+                            realChunk = raw;
+                        } else {
+                            // Antisense: downstream into intron is donorEx.start - 1 down to donorEx.start - delta
+                            const intronStart = donorEx.start - delta;
+                            const intronEnd = donorEx.start - 1;
+                            let raw = await fetchRegionSequence(chromosome, intronStart, intronEnd);
+                            if (!raw || raw.length === 0) raw = "GTAAGTTCCAGTGAC".substring(0, delta);
+
+                            if (variant.pos >= intronStart && variant.pos <= intronEnd) {
+                                const arr = raw.split('');
+                                arr[variant.pos - intronStart] = variant.alt;
+                                raw = arr.join('');
+                                variantPosIndex = seqUpstream.length + (intronEnd - variant.pos);
+                            }
+                            realChunk = reverseComplement(raw);
                         }
                         crypticIntronSeq = realChunk;
                     } else {
-                        // Exon deletion: check if variant is in the deleted exon portion
-                        if (variant.pos > donorEx.end - delta && variant.pos <= donorEx.end) {
-                            const delOffset = variant.pos - (donorEx.end - delta + 1);
-                            variantPosIndex = Math.max(0, seqUpstream.length - delta + delOffset);
+                        // Exon deletion: check if variant is in deleted exon portion
+                        if (!isAntisense) {
+                            if (variant.pos > donorEx.end - delta && variant.pos <= donorEx.end) {
+                                const delOffset = variant.pos - (donorEx.end - delta + 1);
+                                variantPosIndex = Math.max(0, seqUpstream.length - delta + delOffset);
+                            }
+                        } else {
+                            if (variant.pos >= donorEx.start && variant.pos < donorEx.start + delta) {
+                                const delOffset = variant.pos - donorEx.start;
+                                variantPosIndex = Math.max(0, seqUpstream.length - delta + delOffset);
+                            }
                         }
                     }
                 }
 
                 if (nextEx) {
                     const headInfo = getCodonAlignedExonHead(nextEx, 15);
-                    const fetchedDown = await fetchRegionSequence(chromosome, headInfo.start, headInfo.end);
+                    const fetchedDown = await fetchExonSegment5to3(chromosome, headInfo, model.strandNumeric);
                     if (fetchedDown) seqDownstream = fetchedDown;
                     seqNextPhase = headInfo.phase;
                 }
@@ -1946,7 +2287,7 @@ export function renderConsequenceSimulator(container, model) {
             });
         }
 
-        // Scenario 3: Intron Retention Dual Comparison (Tarea 4: Búsqueda del STOP real en secuencia)
+        // Scenario 3: Intron Retention Dual Comparison (with 5' -> 3' real STOP search)
         const btnS3 = card.querySelector('#btnRecalcScenario3');
         const resS3 = card.querySelector('#resultScenario3');
         const viewerS3 = card.querySelector('#scenario3ViewerContainer');
@@ -1954,12 +2295,13 @@ export function renderConsequenceSimulator(container, model) {
         if (btnS3 && resS3) {
             btnS3.addEventListener('click', async () => {
                 btnS3.disabled = true;
-                btnS3.innerHTML = '<span class="calc-spinner">⏳ Calculando y buscando STOP en secuencia...</span>';
+                btnS3.innerHTML = '<span class="calc-spinner">⏳ Cargando secuencias y buscando STOP...</span>';
                 if (viewerS3) viewerS3.innerHTML = '';
 
                 const donorEx = exons.find(e => e.exonNum === affectedExonNum) || exons[0];
                 const nextEx = exons.find(e => e.exonNum === donorEx.exonNum + 1) || exons[1] || null;
                 const intronAfter = (adjacentIntron || introns.find(i => i.donorExon === donorEx.exonNum) || introns[0]);
+                const isAntisense = (model.strandNumeric === -1);
 
                 let exonTail = 'AGCTACCCAGTT';
                 let intronStartSeq = 'GTAAGTTAGCTAATGACTTGACCA';
@@ -1970,14 +2312,14 @@ export function renderConsequenceSimulator(container, model) {
 
                 if (donorEx) {
                     const tailInfo = getCodonAlignedExonTail(donorEx, 15);
-                    const exFetch = await fetchRegionSequence(chromosome, tailInfo.start, donorEx.end);
+                    const exFetch = await fetchExonSegment5to3(chromosome, tailInfo, model.strandNumeric);
                     if (exFetch) exonTail = exFetch;
                     seqPrevPhase = tailInfo.phase; // 0
                 }
 
                 if (nextEx) {
                     const headInfo = getCodonAlignedExonHead(nextEx, 15);
-                    const nFetch = await fetchRegionSequence(chromosome, headInfo.start, headInfo.end);
+                    const nFetch = await fetchExonSegment5to3(chromosome, headInfo, model.strandNumeric);
                     if (nFetch) nextExHead = nFetch;
                     seqNextPhase = headInfo.phase;
                 }
@@ -1988,20 +2330,31 @@ export function renderConsequenceSimulator(container, model) {
                 let insertedAAs = 5;
 
                 if (intronAfter) {
-                    // Fetch up to 300 pb of the intron to find the real in-frame STOP
-                    const fetchEnd = Math.min(intronAfter.end, intronAfter.start + 299);
-                    let intrFetch = await fetchRegionSequence(chromosome, intronAfter.start, fetchEnd);
-                    if (!intrFetch || intrFetch.length === 0) {
-                        intrFetch = 'GTAAGTTAGCTAATGACTTGACCA';
-                    }
-
-                    // If variant is inside the fetched intron range, apply it
-                    if (variant.pos >= intronAfter.start && variant.pos <= fetchEnd) {
-                        const vOffset = variant.pos - intronAfter.start;
-                        const arr = intrFetch.split('');
-                        arr[vOffset] = variant.alt;
-                        intrFetch = arr.join('');
-                        variantPosIndex = exonTail.length + vOffset;
+                    let intrFetch = "";
+                    if (!isAntisense) {
+                        const fetchEnd = Math.min(intronAfter.end, intronAfter.start + 299);
+                        let raw = await fetchRegionSequence(chromosome, intronAfter.start, fetchEnd);
+                        if (!raw || raw.length === 0) raw = 'GTAAGTTAGCTAATGACTTGACCA';
+                        if (variant.pos >= intronAfter.start && variant.pos <= fetchEnd) {
+                            const vOffset = variant.pos - intronAfter.start;
+                            const arr = raw.split('');
+                            arr[vOffset] = variant.alt;
+                            raw = arr.join('');
+                            variantPosIndex = exonTail.length + vOffset;
+                        }
+                        intrFetch = raw;
+                    } else {
+                        // Antisense: downstream from donor (intronAfter.end) downwards
+                        const fetchStart = Math.max(intronAfter.start, intronAfter.end - 299);
+                        let raw = await fetchRegionSequence(chromosome, fetchStart, intronAfter.end);
+                        if (!raw || raw.length === 0) raw = 'GTAAGTTAGCTAATGACTTGACCA';
+                        if (variant.pos >= fetchStart && variant.pos <= intronAfter.end) {
+                            const arr = raw.split('');
+                            arr[variant.pos - fetchStart] = variant.alt;
+                            raw = arr.join('');
+                            variantPosIndex = exonTail.length + (intronAfter.end - variant.pos);
+                        }
+                        intrFetch = reverseComplement(raw);
                     }
 
                     // Combined transcript: Exon Tail (Phase 0) + Intron
@@ -2063,7 +2416,7 @@ export function renderConsequenceSimulator(container, model) {
             });
         }
     } else {
-        // Scenario: Frameshift Live Recalculation
+        // Scenario: Frameshift Live Recalculation (with strand -1 biological 5' -> 3' support)
         const btnRunFs = card.querySelector('#btnRunFrameshiftModule');
         const fsBox = card.querySelector('#frameshiftResultBox');
         const fsViewer = card.querySelector('#frameshiftViewerContainer');
@@ -2071,40 +2424,64 @@ export function renderConsequenceSimulator(container, model) {
         if (btnRunFs && fsBox) {
             btnRunFs.addEventListener('click', async () => {
                 btnRunFs.disabled = true;
-                btnRunFs.innerHTML = '<span class="calc-spinner">⏳ Calculando marco de lectura y buscando STOP en secuencia...</span>';
+                btnRunFs.innerHTML = '<span class="calc-spinner">⏳ Cargando secuencias y calculando marco...</span>';
                 if (fsViewer) fsViewer.innerHTML = '';
 
                 const targetExon = variantLocation.exon || exons.find(e => variant.pos >= e.start && variant.pos <= e.end) || exons[0];
                 const exonEntryPhase = targetExon.phase ?? 0;
-                const varOffsetInExon = Math.max(0, variant.pos - targetExon.start);
+                const isAntisense = (model.strandNumeric === -1);
 
-                // Codon containing the variant according to Step 3 exon phase
-                const codonLead = (varOffsetInExon + exonEntryPhase) % 3;
-                const codonStartPos = variant.pos - codonLead;
+                let fullSeq = "";
+                let relVarIdx = 0;
+                let startPhase = 0;
 
-                // Start display 15 pb before variant, aligned to phase 0 boundary
-                let viewStart = Math.max(targetExon.start, codonStartPos - 15);
-                const rem = (viewStart - targetExon.start + exonEntryPhase) % 3;
-                if (rem !== 0) viewStart -= rem;
-                if (viewStart < targetExon.start) viewStart = targetExon.start;
-                const startPhase = (viewStart - targetExon.start + exonEntryPhase) % 3; // Guaranteed 0
+                if (!isAntisense) {
+                    const varOffsetInExon = Math.max(0, variant.pos - targetExon.start);
+                    const codonLead = (varOffsetInExon + exonEntryPhase) % 3;
+                    const codonStartPos = variant.pos - codonLead;
 
-                // Fetch sequence from viewStart through targetExon.end (and up to 300 pb downstream)
-                const fetchEnd = Math.min(model.end, Math.max(targetExon.end, variant.pos + 300));
-                let fullSeq = await fetchRegionSequence(chromosome, viewStart, fetchEnd);
-                if (!fullSeq || fullSeq.length === 0) {
-                    fullSeq = "N".repeat(fetchEnd - viewStart + 1);
+                    let viewStart = Math.max(targetExon.start, codonStartPos - 15);
+                    const rem = (viewStart - targetExon.start + exonEntryPhase) % 3;
+                    if (rem !== 0) viewStart -= rem;
+                    if (viewStart < targetExon.start) viewStart = targetExon.start;
+                    startPhase = (viewStart - targetExon.start + exonEntryPhase) % 3; // 0
+
+                    const fetchEnd = Math.min(model.end, Math.max(targetExon.end, variant.pos + 300));
+                    let raw = await fetchRegionSequence(chromosome, viewStart, fetchEnd);
+                    if (!raw || raw.length === 0) raw = "N".repeat(fetchEnd - viewStart + 1);
+
+                    fullSeq = raw;
+                    relVarIdx = variant.pos - viewStart;
+                } else {
+                    // Antisense: 5' entrance is targetExon.end, moving down to targetExon.start
+                    const varOffsetInExon = Math.max(0, targetExon.end - variant.pos);
+                    const codonLead = (varOffsetInExon + exonEntryPhase) % 3;
+                    const codonStartPos = variant.pos + codonLead; // higher genomic coord
+
+                    let viewStartCoord = Math.min(targetExon.end, codonStartPos + 15);
+                    const rem = (targetExon.end - viewStartCoord + exonEntryPhase) % 3;
+                    if (rem !== 0) viewStartCoord += rem;
+                    if (viewStartCoord > targetExon.end) viewStartCoord = targetExon.end;
+                    startPhase = (targetExon.end - viewStartCoord + exonEntryPhase) % 3; // 0
+
+                    const fetchEndCoord = Math.max(model.start, Math.min(targetExon.start, variant.pos - 300));
+                    let rawGenomic = await fetchRegionSequence(chromosome, fetchEndCoord, viewStartCoord);
+                    if (!rawGenomic || rawGenomic.length === 0) rawGenomic = "N".repeat(viewStartCoord - fetchEndCoord + 1);
+
+                    fullSeq = reverseComplement(rawGenomic);
+                    relVarIdx = viewStartCoord - variant.pos;
                 }
 
-                const relVarIdx = variant.pos - viewStart;
-                const refLen = Math.max(1, (variant.ref || 'N').length);
-                const deltaNt = variant.alt.length - variant.ref.length;
+                const effectiveRef = isAntisense ? reverseComplement(variant.ref || 'N') : (variant.ref || 'N');
+                const effectiveAlt = isAntisense ? reverseComplement(variant.alt || 'N') : (variant.alt || 'N');
+                const refLen = Math.max(1, effectiveRef.length);
+                const deltaNt = effectiveAlt.length - effectiveRef.length;
                 const shift = (deltaNt % 3 + 3) % 3;
                 const isFrameshift = (shift !== 0);
 
-                // Construct WT sequence and Mutant sequence
+                // Construct WT sequence and Mutant sequence in 5' -> 3' mRNA
                 const wtSeq = fullSeq;
-                const mutSeq = fullSeq.substring(0, relVarIdx) + variant.alt + fullSeq.substring(relVarIdx + refLen);
+                const mutSeq = fullSeq.substring(0, relVarIdx) + effectiveAlt + fullSeq.substring(relVarIdx + refLen);
 
                 // Scan mutant sequence for the first in-frame STOP codon
                 let stopFound = false;
@@ -2115,7 +2492,7 @@ export function renderConsequenceSimulator(container, model) {
 
                 const scanStart = startPhase === 0 ? 0 : (3 - startPhase);
                 for (let c = scanStart; c + 2 < mutSeq.length; c += 3) {
-                    if (c >= relVarIdx - codonLead) {
+                    if (c >= relVarIdx) {
                         const codon = mutSeq.substring(c, c + 3).toUpperCase();
                         const aa = CODON_TABLE[codon];
                         if (aa === '*') {
@@ -2194,8 +2571,8 @@ export function renderConsequenceSimulator(container, model) {
                         isFrameshift,
                         frameshiftStartIndex: relVarIdx,
                         variantPosIndex: relVarIdx,
-                        variantRef: variant.ref,
-                        variantAlt: variant.alt,
+                        variantRef: effectiveRef,
+                        variantAlt: effectiveAlt,
                         stopAtCodonStop: isFrameshift
                     });
 
