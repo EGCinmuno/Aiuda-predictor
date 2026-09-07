@@ -279,9 +279,11 @@ export function renderGenomicExonMap(container, model, onRegionClick = null) {
         strandMarker.textContent = strand === '+' ? '5′ ──────► 3′' : '3′ ◄────── 5′';
         linearTrack.appendChild(strandMarker);
 
-        exons.forEach(ex => {
-            const leftPct = ((ex.start - start) / totalGenomicSpan) * 100;
-            const widthPct = Math.max(0.6, ((ex.end - ex.start + 1) / totalGenomicSpan) * 100);
+        const totalSpan = Math.max(1, end - start + 1);
+
+        exons.forEach((ex) => {
+            const leftPct = ((ex.start - start) / totalSpan) * 100;
+            const widthPct = Math.max(0.4, (ex.length / totalSpan) * 100);
 
             const exonEl = document.createElement('div');
             exonEl.className = 'exon-block';
@@ -289,11 +291,11 @@ export function renderGenomicExonMap(container, model, onRegionClick = null) {
             exonEl.style.width = `${widthPct}%`;
 
             const isVariantInThisExon = (variantLocation.type === 'exon' && variantLocation.exon?.exonNum === ex.exonNum);
-            exonEl.style.background = isVariantInThisExon 
-                ? 'var(--accent-rose)' 
+            exonEl.style.background = isVariantInThisExon
+                ? 'var(--accent-rose)'
                 : (ex.isCoding ? (PHASE_COLORS[ex.phase] || PHASE_COLORS[0]) : PHASE_COLORS[null]);
 
-            exonEl.title = `Exón ${ex.exonNum} | Chr${chromosome}:${ex.start.toLocaleString()} - ${ex.end.toLocaleString()} (${ex.length} pb)`;
+            exonEl.title = `Exón ${ex.exonNum} | Chr${chromosome}:${ex.start.toLocaleString()}–${ex.end.toLocaleString()} (${ex.length.toLocaleString()} pb)`;
 
             if (widthPct > 2.0) {
                 const lbl = document.createElement('span');
@@ -305,12 +307,12 @@ export function renderGenomicExonMap(container, model, onRegionClick = null) {
             exonEl.addEventListener('click', () => {
                 if (onRegionClick) onRegionClick(ex.start);
             });
-
             linearTrack.appendChild(exonEl);
         });
 
-        if (variant && variant.pos) {
-            const varPct = Math.max(0, Math.min(100, ((variant.pos - start) / totalGenomicSpan) * 100));
+        // Variant Pin
+        if (variant && variant.pos && variant.pos >= start && variant.pos <= end) {
+            const varPct = Math.max(0, Math.min(100, ((variant.pos - start) / totalSpan) * 100));
             const pin = document.createElement('div');
             pin.className = 'variant-lollipop';
             pin.style.left = `${varPct}%`;
@@ -325,6 +327,7 @@ export function renderGenomicExonMap(container, model, onRegionClick = null) {
 
         trackWrap.appendChild(linearTrack);
     }
+
 
     wrapper.appendChild(trackWrap);
 
@@ -969,128 +972,45 @@ export function renderSynchronizedGridTrack(segments = [], {
         aaTrack.className = 'f-aa-track sync-grid-row';
         aaTrack.style.display = 'grid';
 
-        for (let sIdx = 0; sIdx < segments.length; sIdx++) {
-            if (stopCutoffIndex !== null) break;
+        if (segments.length === 1 && segments[0].type === 'deleted') {
+            const delCell = document.createElement('div');
+            delCell.className = 'f-aa-deleted';
+            delCell.style.gridColumn = `span ${chars.length}`;
+            delCell.style.display = 'flex';
+            delCell.style.alignItems = 'center';
+            delCell.style.justifyContent = 'center';
+            delCell.style.fontSize = '0.7rem';
+            delCell.style.color = 'var(--accent-rose)';
+            delCell.style.textDecoration = 'line-through';
+            delCell.style.opacity = '0.65';
+            delCell.innerHTML = `<span>${segments[0].label || 'Omitido'}</span>`;
+            aaTrack.appendChild(delCell);
+        } else {
+            const startPhase = (segments[0].startPhase !== undefined && segments[0].startPhase !== null)
+                ? (segments[0].startPhase % 3)
+                : 0;
 
-            const seg = segments[sIdx];
-            const seq = (seg.seq || '').toUpperCase();
-            const segLen = seq.length;
-            if (segLen === 0) { continue; }
-
-            const phase = (seg.startPhase !== undefined && seg.startPhase !== null)
-                ? seg.startPhase
-                : rollingPhase;
-
-            const isIntronSeg = (seg.type === 'intron');
-            const isDeletedSeg = (seg.type === 'deleted');
-
-            // --- DELETED SEGMENT (e.g. omitted exon in skipping) ---
-            if (isDeletedSeg) {
-                const delCell = document.createElement('div');
-                delCell.className = 'f-aa-deleted';
-                delCell.style.gridColumn = `span ${segLen}`;
-                delCell.style.display = 'flex';
-                delCell.style.alignItems = 'center';
-                delCell.style.justifyContent = 'center';
-                delCell.style.fontSize = '0.7rem';
-                delCell.style.color = 'var(--accent-rose)';
-                delCell.style.textDecoration = 'line-through';
-                delCell.style.opacity = '0.65';
-                delCell.innerHTML = `<span>${seg.label || 'Omitido'}</span>`;
-                aaTrack.appendChild(delCell);
-                gIdx += segLen;
-                rollingPhase = (phase + segLen) % 3;
-                continue;
+            let c = 0;
+            const leadBasesCount = startPhase > 0 ? ((3 - startPhase) % 3) : 0;
+            if (leadBasesCount > 0 && leadBasesCount <= chars.length) {
+                const leadCell = document.createElement('div');
+                leadCell.className = 'f-aa-split';
+                leadCell.style.gridColumn = `span ${leadBasesCount}`;
+                leadCell.innerHTML = `<span>···</span>`;
+                aaTrack.appendChild(leadCell);
+                c += leadBasesCount;
             }
 
-            // --- INTRON SEGMENT ---
-            if (isIntronSeg) {
-                let ip = 0;
-                const leadBasesCount = phase > 0 ? ((3 - phase) % 3) : 0;
-                if (leadBasesCount > 0 && ip < segLen) {
-                    const leadCell = document.createElement('div');
-                    leadCell.className = 'f-aa-mid f-intron-aa-mid';
-                    leadCell.style.gridColumn = `span ${leadBasesCount}`;
-                    leadCell.style.background = 'rgba(168,85,247,0.1)';
-                    aaTrack.appendChild(leadCell);
-                    ip += leadBasesCount;
-                }
-                while (ip + 2 < segLen) {
-                    const codon = seq.substring(ip, ip + 3);
-                    const aa = CODON_TABLE[codon] || 'X';
-                    const aa3 = aa1to3(aa);
-                    const isStop = (aa === '*');
-                    const chevron = document.createElement('div');
-                    chevron.style.gridColumn = 'span 3';
-                    if (isStop) {
-                        chevron.className = 'f-aa-chevron is-stop';
-                        chevron.style.cssText += ';background:rgba(239,68,68,0.45);border-color:var(--accent-rose);color:#fff;box-shadow:0 0 12px rgba(239,68,68,0.9);';
-                        chevron.innerHTML = `<span style="font-weight:900;">🛑 STOP *</span>`;
-                        chevron.title = `Codón Stop Prematuro en intrón retenido: ${codon}`;
-                        aaTrack.appendChild(chevron);
-                        ip += 3;
-
-                        // Strict termination at STOP
-                        if (stopAtCodonStop) {
-                            stopCutoffIndex = gIdx + ip;
-                            break;
-                        }
-                    } else {
-                        chevron.className = 'f-aa-chevron f-intron-aa-chevron';
-                        chevron.style.cssText += ';background:rgba(168,85,247,0.2);border-color:#a855f7;color:#c084fc;';
-                        chevron.innerHTML = `<span>${aa3}</span>`;
-                        chevron.title = `Codón intrónico: ${codon} → ${aaFullName(aa)} (${aa3})`;
-                        aaTrack.appendChild(chevron);
-                        ip += 3;
-                    }
-                }
-                if (stopCutoffIndex === null && ip < segLen) {
-                    const rem = document.createElement('div');
-                    rem.className = 'f-aa-partial f-intron-aa-mid';
-                    rem.style.gridColumn = `span ${segLen - ip}`;
-                    rem.style.background = 'rgba(168,85,247,0.08)';
-                    rem.innerHTML = `<span style="opacity:0.4">···</span>`;
-                    aaTrack.appendChild(rem);
-                }
-                gIdx += (stopCutoffIndex !== null ? ip : segLen);
-                rollingPhase = (phase + segLen) % 3;
-                continue;
-            }
-
-            // --- EXON SEGMENT ---
-            let ep = 0;
-
-            // 1. If segment begins with a split-codon completion from previous exon (phase = 1 or 2)
-            const leadBasesCount = phase > 0 ? ((3 - phase) % 3) : 0;
-            if (leadBasesCount > 0 && ep < segLen) {
-                const completingBases = seq.substring(0, leadBasesCount);
-                const prevSeg = sIdx > 0 ? segments[sIdx - 1] : null;
-                const prevSeq = prevSeg ? (prevSeg.seq || '').toUpperCase() : '';
-                const prevTail = prevSeq.substring(Math.max(0, prevSeq.length - phase));
-                const fullCodon = (prevTail + completingBases).toUpperCase();
-                const aa = CODON_TABLE[fullCodon] || 'X';
-                const aa3 = aa1to3(aa);
-
-                const splitEnd = document.createElement('div');
-                splitEnd.className = 'f-aa-split';
-                splitEnd.style.gridColumn = `span ${leadBasesCount}`;
-                splitEnd.innerHTML = `<span>[➔ ${leadBasesCount}/3 ${aa3}]</span>`;
-                splitEnd.title = `Codón dividido completado: ${prevTail || '...'}+${completingBases} = ${fullCodon} → ${aaFullName(aa)} (${aa3})`;
-                aaTrack.appendChild(splitEnd);
-                ep += leadBasesCount;
-            }
-
-            // 2. Translate full codons
-            while (ep + 2 < segLen) {
-                const remaining = segLen - ep;
-                if (remaining < 3) break; // handle below as trailing split
-
-                const codon = seq.substring(ep, ep + 3);
+            while (c + 2 < chars.length) {
+                const codon = chars[c].base + chars[c + 1].base + chars[c + 2].base;
                 const aa = CODON_TABLE[codon] || 'X';
                 const aa3 = aa1to3(aa);
                 const isStop = (aa === '*');
-                const globalCodonStart = gIdx + ep;
-                const isAberrant = isFrameshift && frameshiftStartIndex !== null && globalCodonStart >= frameshiftStartIndex;
+
+                // Check if this codon crosses a junction boundary or starts right at a junction
+                const isJunctionCodon = junctionIndexes.some(j => (j > c && j < c + 3) || (j === c && c > 0));
+                const isAberrant = isFrameshift && frameshiftStartIndex !== null && c >= frameshiftStartIndex;
+                const isIntronCodon = (chars[c].type === 'intron' || chars[c + 1].type === 'intron' || chars[c + 2].type === 'intron');
 
                 const chevron = document.createElement('div');
                 chevron.style.gridColumn = 'span 3';
@@ -1099,65 +1019,48 @@ export function renderSynchronizedGridTrack(segments = [], {
                     chevron.className = 'f-aa-chevron is-stop';
                     chevron.style.cssText += ';background:rgba(239,68,68,0.45);border-color:var(--accent-rose);color:#fff;box-shadow:0 0 12px rgba(239,68,68,0.9);';
                     chevron.innerHTML = `<span style="font-weight:900;">🛑 STOP *</span>`;
-                    chevron.title = `Codón Stop Prematuro: ${codon}`;
+                    chevron.title = `Codón Stop Prematuro (PTC): ${codon}`;
                     aaTrack.appendChild(chevron);
-                    ep += 3;
+                    c += 3;
 
-                    // Strict termination at STOP
                     if (stopAtCodonStop) {
-                        stopCutoffIndex = gIdx + ep;
+                        stopCutoffIndex = c;
                         break;
                     }
-                } else if (isAberrant) {
-                    chevron.className = 'f-aa-chevron';
-                    chevron.style.cssText += ';background:rgba(245,158,11,0.25);border-color:var(--accent-amber);color:#fbbf24;';
-                    chevron.innerHTML = `<span>${aa3}</span>`;
-                    chevron.title = `Marco aberrante: ${codon} → ${aaFullName(aa)} (${aa3})`;
+                } else if (isJunctionCodon) {
+                    chevron.className = 'f-aa-chevron is-junction-aa';
+                    chevron.innerHTML = `<span>⚡ ${aa3}</span>`;
+                    chevron.title = `⚡ Nuevo aminoácido híbrido de unión: ${codon} → ${aaFullName(aa)} (${aa3})`;
                     aaTrack.appendChild(chevron);
-                    ep += 3;
+                    c += 3;
+                } else if (isIntronCodon) {
+                    chevron.className = 'f-aa-chevron f-intron-aa-chevron is-cryptic-intron-aa';
+                    chevron.innerHTML = `<span>${aa3}</span>`;
+                    chevron.title = `Codón intrónico retenido: ${codon} → ${aaFullName(aa)} (${aa3})`;
+                    aaTrack.appendChild(chevron);
+                    c += 3;
+                } else if (isAberrant) {
+                    chevron.className = 'f-aa-chevron is-aberrant-aa';
+                    chevron.innerHTML = `<span>${aa3}</span>`;
+                    chevron.title = `Marco aberrante (+frameshift): ${codon} → ${aaFullName(aa)} (${aa3})`;
+                    aaTrack.appendChild(chevron);
+                    c += 3;
                 } else {
                     chevron.className = 'f-aa-chevron';
                     chevron.innerHTML = `<span>${aa3}</span>`;
-                    chevron.title = `${seg.label ? seg.label + ': ' : ''}${codon} → ${aaFullName(aa)} (${aa3})`;
+                    chevron.title = `${codon} → ${aaFullName(aa)} (${aa3})`;
                     aaTrack.appendChild(chevron);
-                    ep += 3;
+                    c += 3;
                 }
             }
 
-            if (stopCutoffIndex !== null) {
-                gIdx += ep;
-                break;
-            }
-
-            // 3. Trailing split codon at end of this exon segment
-            const endSplitCount = (phase + segLen) % 3;
-            if (endSplitCount > 0 && ep < segLen) {
-                const tailBases = seq.substring(ep);
-                const tailLen = tailBases.length;
-                const nextSeg = sIdx < segments.length - 1 ? segments[sIdx + 1] : null;
-                const nextSeq = nextSeg ? (nextSeg.seq || '').toUpperCase() : '';
-                const headBases = nextSeq.substring(0, 3 - tailLen);
-                const fullCodon = (tailBases + headBases).toUpperCase();
-                const aa = CODON_TABLE[fullCodon] || 'X';
-                const aa3 = aa1to3(aa);
-
-                const splitStart = document.createElement('div');
-                splitStart.className = 'f-aa-split';
-                splitStart.style.gridColumn = `span ${tailLen}`;
-                splitStart.innerHTML = `<span>[${aa3} ${tailLen}/3 ➔]</span>`;
-                splitStart.title = `Codón dividido: ${tailBases} (${tailLen}nt aquí) + ${headBases || '...'} = ${fullCodon} → ${aaFullName(aa)} (${aa3})`;
-                aaTrack.appendChild(splitStart);
-                ep += tailLen;
-            } else if (ep < segLen) {
+            if (stopCutoffIndex === null && c < chars.length) {
                 const rem = document.createElement('div');
                 rem.className = 'f-aa-partial';
-                rem.style.gridColumn = `span ${segLen - ep}`;
+                rem.style.gridColumn = `span ${chars.length - c}`;
                 rem.innerHTML = `<span>···</span>`;
                 aaTrack.appendChild(rem);
             }
-
-            gIdx += segLen;
-            rollingPhase = (phase + segLen) % 3;
         }
     }
 
@@ -1244,6 +1147,7 @@ export function renderComparisonSplicingViewer(containerEl, {
     crypticDelta = 4,
     isIntronCryptic = true,
     crypticIntronSeq = null,
+    flankingIntronSeq = null,
     variantPosIndex = null,
     retainedIntronSeq = "GTAAGTTAGCTAATGACTTGACCA",
     variant = { ref: 'G', alt: 'A', pos: 0 }
@@ -1282,69 +1186,63 @@ export function renderComparisonSplicingViewer(containerEl, {
 
     // ─────────────────────────────────────────────────────────────
     // CASO 1: SALTO DE EXÓN COMPLETO (TAREA 2)
-    // Estructura directa:
-    // [Final Exón anterior] (secuencia)
-    // "Se perdería:"
-    // [Inicio Exón saltado] --//-- [Final Exón saltado]
-    // [Inicio Exón siguiente]
-    // Resultado: [Empalme final Exón anterior unido a Exón siguiente]
+    // Layout Visual (3 filas escalonadas):
+    // Fila 1 (Izquierda): [ Final Exón 3 ] Fase 0
+    // Fila 2 (Centrado): [ Inicio Exón 4 (15 pb) ] — Omitido y debajo [ Final Exón 4 (15 pb) ] — Omitido
+    // Fila 3 (Derecha): [ Inicio Exón 5 ]
     // ─────────────────────────────────────────────────────────────
     if (mode === 'skipping') {
         const pNum = prevExon ? prevExon.exonNum : 1;
         const tNum = targetExon ? targetExon.exonNum : 2;
         const nNum = nextExon ? nextExon.exonNum : 3;
 
-        const prevPhase   = seqPrevPhase   !== null ? seqPrevPhase   : 0;
+        const prevPhase   = seqPrevPhase   !== null ? seqPrevPhase   : (prevExon?.endPhase ?? 0);
         const targetPhase = seqTargetPhase !== null ? seqTargetPhase : (targetExon?.phase ?? 0);
         const nextPhase   = seqNextPhase   !== null ? seqNextPhase   : (nextExon?.phase ?? 0);
 
         const wtSection = makeStageCard('wt-stage',
-            `<span class="badge" style="background:rgba(16,185,129,0.18);border:1px solid #10b981;color:#34d399;">🧬 1. Estructura Canónica Salvaje (WT)</span>`,
-            `Límites de los exones originales y región que se omite`
+            `<span class="badge badge-warning">⚠️ Salto de Exón ${tNum} (${skippedLen} pb), Nuevo Empalme: Exón ${pNum} ➔ Exón ${nNum}</span>`,
+            ``
         );
-        const wtFlex = document.createElement('div');
-        wtFlex.className = 'sync-tracks-column';
 
-        // 1. [Final Exón anterior]
+        // Layout Visual en 3 Filas Escalonadas
+        const wtFlex = document.createElement('div');
+        wtFlex.className = 'scenario1-cascade-container';
+
+        // Fila 1 A la izquierda: [ Final Exón 3 ] Fase 0
+        const row1 = document.createElement('div');
+        row1.className = 'scenario1-row scenario1-row--left';
         const ex1Track = renderSynchronizedGridTrack(
             [{ seq: seqPrev, label: `Exón ${pNum}`, type: 'exon', startPhase: prevPhase }],
             { junctionIndexes: [] }
         );
-        wtFlex.appendChild(makeNamedBox('',
-            `<span>[ Final Exón <strong>${pNum}</strong> ]</span><span class="phase-tag">Salida: Fase ${prevExon?.endPhase ?? 0}</span>`,
+        const colLeft = makeNamedBox('',
+            `<span>[ Final Exón <strong>${pNum}</strong> ] Fase ${prevPhase}</span>`,
             ex1Track
-        ));
+        );
+        row1.appendChild(colLeft);
+        wtFlex.appendChild(row1);
 
-        // 2. Texto: "Se perdería:"
-        const lossDivider = document.createElement('div');
-        lossDivider.className = 'skipping-loss-divider';
-        lossDivider.innerHTML = `<span>⚠️ Se perdería en el transcripto maduro:</span>`;
-        wtFlex.appendChild(lossDivider);
+        // Fila 2 Centrado: [ Inicio Exón 4 (15 pb) ] — Omitido y debajo [ Final Exón 4 (15 pb) ] — Omitido
+        const row2 = document.createElement('div');
+        row2.className = 'scenario1-row scenario1-row--center';
 
-        // 3. [Inicio Exón saltado] --//-- [Final Exón saltado] (con elisor si > 30 pb)
         if (skippedLen > 30 && seqTargetTail) {
             const exTHeadTrack = renderSynchronizedGridTrack(
                 [{ seq: seqTarget, label: `Exón ${tNum} (Inicio)`, type: 'exon', startPhase: targetPhase }],
                 { junctionIndexes: [] }
             );
-            wtFlex.appendChild(makeNamedBox('is-skipped-box',
-                `<span style="color:var(--accent-rose);">[ Inicio Exón <strong>${tNum}</strong> (15 pb) ] — Omitido</span>
-                 <span class="phase-tag">Entrada: Fase ${targetPhase}</span>`,
+            row2.appendChild(makeNamedBox('is-skipped-box',
+                `<span style="color:var(--accent-rose);">[ Inicio Exón <strong>${tNum}</strong> (15 pb) ] — Omitido</span>`,
                 exTHeadTrack
             ));
-
-            const elisorEl = document.createElement('div');
-            elisorEl.className = 'exon-elisor-separator';
-            elisorEl.innerHTML = `<span class="elisor-line">──//──</span> <span class="elisor-badge">... // Exón ${tNum} Omitido (${skippedLen} pb en total) // ...</span> <span class="elisor-line">──//──</span>`;
-            wtFlex.appendChild(elisorEl);
 
             const exTTailTrack = renderSynchronizedGridTrack(
                 [{ seq: seqTargetTail, label: `Exón ${tNum} (Final)`, type: 'exon', startPhase: 0 }],
                 { junctionIndexes: [] }
             );
-            wtFlex.appendChild(makeNamedBox('is-skipped-box',
-                `<span style="color:var(--accent-rose);">[ Final Exón <strong>${tNum}</strong> (15 pb) ] — Omitido</span>
-                 <span class="phase-tag">Salida: Fase ${targetExon?.endPhase ?? 0}</span>`,
+            row2.appendChild(makeNamedBox('is-skipped-box',
+                `<span style="color:var(--accent-rose);">[ Final Exón <strong>${tNum}</strong> (15 pb) ] — Omitido</span>`,
                 exTTailTrack
             ));
         } else {
@@ -1352,34 +1250,33 @@ export function renderComparisonSplicingViewer(containerEl, {
                 [{ seq: seqTarget, label: `Exón ${tNum}`, type: 'exon', startPhase: targetPhase }],
                 { junctionIndexes: [] }
             );
-            wtFlex.appendChild(makeNamedBox('is-skipped-box',
-                `<span style="color:var(--accent-rose);">[ Exón <strong>${tNum}</strong> (${skippedLen} pb) ] — Omitido</span>
-                 <span class="badge badge-danger" style="font-size:0.65rem;">Se omite</span>`,
+            row2.appendChild(makeNamedBox('is-skipped-box',
+                `<span style="color:var(--accent-rose);">[ Inicio Exón <strong>${tNum}</strong> (${skippedLen} pb) ] — Omitido</span>`,
                 exTTrack
             ));
         }
+        wtFlex.appendChild(row2);
 
-        const nextDivider = document.createElement('div');
-        nextDivider.className = 'intron-flow-separator';
-        nextDivider.innerHTML = `<span>──►</span><span class="intron-split-badge">Intrón (-//-)</span><span>──►</span>`;
-        wtFlex.appendChild(nextDivider);
-
-        // 4. [Inicio Exón siguiente]
+        // Fila 3 A la derecha: [ Inicio Exón 5 ]
+        const row3 = document.createElement('div');
+        row3.className = 'scenario1-row scenario1-row--right';
         const ex2Track = renderSynchronizedGridTrack(
             [{ seq: seqNext, label: `Exón ${nNum}`, type: 'exon', startPhase: nextPhase }],
             { junctionIndexes: [] }
         );
-        wtFlex.appendChild(makeNamedBox('',
-            `<span>[ Inicio Exón <strong>${nNum}</strong> ]</span><span class="phase-tag">Entrada: Fase ${nextPhase}</span>`,
+        const colRight = makeNamedBox('',
+            `<span>[ Inicio Exón <strong>${nNum}</strong> ]</span>`,
             ex2Track
-        ));
+        );
+        row3.appendChild(colRight);
+        wtFlex.appendChild(row3);
 
         wtSection.appendChild(wtFlex);
         wrap.appendChild(wtSection);
 
-        // 5. [Resultado: Empalme final Exón anterior unido al Exón siguiente]
+        // Conclusión: Resultado: ARNm Empalmado Final
         const mutSection = makeStageCard('mut-stage',
-            `<span class="badge ${isFrameshift ? 'badge-danger' : 'badge-warning'}">✂ 2. Resultado: ARNm Empalmado Final</span>`,
+            `<span class="badge ${isFrameshift ? 'badge-danger' : 'badge-success'}">Resultado: ARNm Empalmado Final</span>`,
             `Empalme directo: <strong>[ Exón ${pNum} ] ✂ [ Exón ${nNum} ]</strong> (${isFrameshift ? `Frameshift +${frameshiftShift} nt → Stop Prematuro 🛑` : '✅ In-Frame: 3n conservado'})`
         );
         const mutFlex = document.createElement('div');
@@ -1394,7 +1291,7 @@ export function renderComparisonSplicingViewer(containerEl, {
             frameshiftStartIndex: isFrameshift ? seqPrev.length : null
         });
         mutFlex.appendChild(makeNamedBox('full-joined-box',
-            `<span>[ Resultado: Exón <strong>${pNum}</strong> ✂ Exón <strong>${nNum}</strong> ] — Unión final sin Exón ${tNum}</span>
+            `<span>[ Exón <strong>${pNum}</strong> ] ✂ [ Exón <strong>${nNum}</strong> ]</span>
              <span class="badge ${isFrameshift ? 'badge-danger' : 'badge-neutral'}">${isFrameshift ? '⚠️ Frameshift' : '✅ In-Frame'}</span>`,
             joinedTrack
         ));
@@ -1405,8 +1302,8 @@ export function renderComparisonSplicingViewer(containerEl, {
 
     // ─────────────────────────────────────────────────────────────
     // CASO 2: ACTIVACIÓN DE SITIOS CRÍPTICOS (TAREA 3)
-    // Paso 1: Estructura Primaria (Pre-ARNm con región intrónica sombreada)
-    // Paso 2: Empalme Mutado (ARNm unido con bloques diferenciados y traducción)
+    // Paso 1: Estructura Primaria (Genómica / Pre-ARNm con región retenida + flanqueante)
+    // Paso 2: Nuevo Empalme (ARNm ensamblado, traduciendo el nuevo codón híbrido de unión)
     // ─────────────────────────────────────────────────────────────
     else if (mode === 'cryptic') {
         const dNum = prevExon ? prevExon.exonNum : 1;
@@ -1415,18 +1312,20 @@ export function renderComparisonSplicingViewer(containerEl, {
 
         if (isIntronCryptic) {
             const crypticIntronChunk = crypticIntronSeq || ("GTAAGTTCCAGTGAC").substring(0, crypticDelta);
+            const flankingChunk = flankingIntronSeq || ("GTAAGTTCCAGTGACCCAGTGAC").substring(crypticDelta, crypticDelta + 8) || "CCAGTGAC";
             const newSiteIdx = seqPrev.length + crypticDelta;
 
             // ── PASO 1: ESTRUCTURA PRIMARIA (PRE-ARNM / NUCLEÓTIDOS CON INTRÓN SOMBREADO) ──
             const step1Card = makeStageCard('wt-stage',
                 `<span class="badge" style="background:rgba(148,163,184,0.18);border:1px solid #64748b;color:#cbd5e1;">🧬 1. Estructura Primaria (Genómica / Pre-ARNm)</span>`,
-                `Límite canónico original inactivado y fragmento intrónico que se incorporará (+${crypticDelta} pb)`
+                `Límite canónico original inactivado y fragmento intrónico retenido (+${crypticDelta} pb)`
             );
             const rawTrack = renderSynchronizedGridTrack([
                 { seq: seqPrev,            label: `Exón ${dNum} Dador`,              type: 'exon',   startPhase: donorPhase },
-                { seq: crypticIntronChunk, label: `Intrón (+${crypticDelta} pb)`,   type: 'intron', startPhase: null }
+                { seq: crypticIntronChunk, label: `+${crypticDelta} pb Retenidas`,   type: 'intron', startPhase: null },
+                { seq: flankingChunk,      label: `Intrón Flanqueante`,             type: 'intron', startPhase: null }
             ], {
-                showAminoAcids: false,
+                showAminoAcids: true,
                 junctionIndexes: [seqPrev.length, newSiteIdx],
                 variantPosIndex: variantPosIndex,
                 variantRef: variant.ref,
@@ -1435,9 +1334,8 @@ export function renderComparisonSplicingViewer(containerEl, {
             step1Card.appendChild(makeNamedBox('',
                 `<span>[ Exón <strong>${dNum}</strong> Dador ] ──► <span style="color:#c084fc;">[ +${crypticDelta} pb Intrónicas retenidas ]</span> ──► ⚡ Sitio Críptico</span>
                  <div style="display:flex;gap:6px;">
-                   <span class="site-tag original-site-tag">📍 Límite Original</span>
-                   <span class="site-tag new-site-tag">⚡ Nuevo Sitio Críptico</span>
-                   <span class="pre-mrna-badge">Pre-Traducción</span>
+                   <span class="site-tag original-site-tag">📍 Límite Original Inactivado</span>
+                   <span class="site-tag new-site-tag">⚡ Sitio Críptico</span>
                  </div>`,
                 rawTrack
             ));
@@ -1445,17 +1343,17 @@ export function renderComparisonSplicingViewer(containerEl, {
 
             // ── PASO 2: EMPALME MUTADO (ARNM ENSAMBLADO Y TRADUCIDO) ──
             const step2Card = makeStageCard('mut-stage',
-                `<span class="badge ${isFrameshift ? 'badge-danger' : 'badge-warning'}">✂ 2. Empalme Mutado y Traducción del Marco Reconstruido</span>`,
-                `Secuencia ya unida: [Exón ${dNum}] + [+${crypticDelta} pb Intrón] + [Exón ${aNum}]. Traducción continua y nuevos aminoácidos (${isFrameshift ? `Frameshift +${frameshiftShift} nt` : '✅ In-Frame'})`
+                `<span class="badge ${isFrameshift ? 'badge-danger' : 'badge-warning'}">✂ 2. Nuevo Empalme: [Exón ${dNum}] + [+${crypticDelta} pb Intrón] + [Exón ${aNum}] (${isFrameshift ? `Frameshift +${frameshiftShift} nt` : '✅ In-Frame'})</span>`,
+                `Unión procesada con inclusión críptica y traducción del nuevo codón de unión`
             );
             const splicedTrack = renderSynchronizedGridTrack([
-                { seq: seqPrev,            label: `Exón ${dNum} Dador`,              type: 'exon',   startPhase: donorPhase },
-                { seq: crypticIntronChunk, label: `Intrón +${crypticDelta}pb`,       type: 'intron', startPhase: null },
-                { seq: seqNext,            label: `Exón ${aNum} Aceptor`,            type: 'exon',   startPhase: null }
+                { seq: seqPrev,            label: `Exón ${dNum}`,                    type: 'exon',   startPhase: donorPhase },
+                { seq: crypticIntronChunk, label: `+${crypticDelta}pb Intrón`,       type: 'intron', startPhase: null },
+                { seq: seqNext,            label: `Exón ${aNum}`,                    type: 'exon',   startPhase: null }
             ], {
                 showAminoAcids: true,
                 junctionIndexes: [seqPrev.length, newSiteIdx],
-                variantPosIndex: variantPosIndex,
+                variantPosIndex: (variantPosIndex !== null && variantPosIndex < seqPrev.length + crypticIntronChunk.length) ? variantPosIndex : null,
                 variantRef: variant.ref,
                 variantAlt: variant.alt,
                 isFrameshift: isFrameshift,
@@ -1482,7 +1380,7 @@ export function renderComparisonSplicingViewer(containerEl, {
                 { seq: keptSeq, label: `Exón ${dNum} Conservado`, type: 'exon', startPhase: donorPhase },
                 { seq: seqPrev.substring(keptLen), label: `Eliminado (-${crypticDelta} pb)`, type: 'deleted', startPhase: null }
             ], {
-                showAminoAcids: false,
+                showAminoAcids: true,
                 junctionIndexes: [keptLen],
                 variantPosIndex: variantPosIndex,
                 variantRef: variant.ref,
@@ -1497,8 +1395,8 @@ export function renderComparisonSplicingViewer(containerEl, {
 
             // Paso 2
             const step2Card = makeStageCard('mut-stage',
-                `<span class="badge ${isFrameshift ? 'badge-danger' : 'badge-warning'}">✂ 2. Empalme Mutado Acortado y Traducción</span>`,
-                `[Exón ${dNum} acortado] unido a [Exón ${aNum}]. Traducción tras la deleción (${isFrameshift ? `Frameshift +${frameshiftShift} nt` : '✅ In-Frame'})`
+                `<span class="badge ${isFrameshift ? 'badge-danger' : 'badge-warning'}">✂ 2. Nuevo Empalme: [Exón ${dNum} Acortado] + [Exón ${aNum}]. Traducción tras la deleción (${isFrameshift ? `Frameshift +${frameshiftShift} nt` : '✅ In-Frame'})</span>`,
+                `[Exón ${dNum} acortado] unido a [Exón ${aNum}]. Traducción tras la deleción`
             );
             const splicedTrack = renderSynchronizedGridTrack([
                 { seq: keptSeq, label: `Exón ${dNum} Acortado`, type: 'exon', startPhase: donorPhase },
@@ -1635,55 +1533,31 @@ async function populateSpliceAIOracle(cardElement, model) {
         const isLoss = pred.recommendation?.action === 'loss';
         const isGain = pred.recommendation?.action === 'gain';
 
+        // Short effect labels (no verbose text)
+        const EFFECT_SHORT = {
+            ds_ag: 'Criptic acceptor gain',
+            ds_al: 'Canonical acceptor loss',
+            ds_dg: 'Cryptic donor gain',
+            ds_dl: 'Canonical donor loss'
+        };
+
         const rows = [
-            {
-                name: 'Aceptor Gain (AG)',
-                score: pred.ds_ag,
-                dp: pred.dp_ag,
-                effect: 'Ganancia de aceptor críptico (elongación / inclusión aberrante)'
-            },
-            {
-                name: 'Aceptor Loss (AL)',
-                score: pred.ds_al,
-                dp: pred.dp_al,
-                effect: 'Pérdida de aceptor canónico (salto de exón o retención)'
-            },
-            {
-                name: 'Donor Gain (DG)',
-                score: pred.ds_dg,
-                dp: pred.dp_dg,
-                effect: 'Ganancia de dador críptico (truncamiento / uso alternativo)'
-            },
-            {
-                name: 'Donor Loss (DL)',
-                score: pred.ds_dl,
-                dp: pred.dp_dl,
-                effect: 'Pérdida de dador canónico (salto de exón o retención)'
-            }
+            { key: 'ds_ag', label: 'DS-AG', score: pred.ds_ag, dp: pred.dp_ag },
+            { key: 'ds_al', label: 'DS-AL', score: pred.ds_al, dp: pred.dp_al },
+            { key: 'ds_dg', label: 'DS-DG', score: pred.ds_dg, dp: pred.dp_dg },
+            { key: 'ds_dl', label: 'DS-DL', score: pred.ds_dl, dp: pred.dp_dl }
         ];
 
         const tableRowsHtml = rows.map(r => {
             const isSignificant = r.score >= 0.2;
-            const rowStyle = isSignificant ? 'style="background: rgba(244, 63, 94, 0.06); font-weight: 600;"' : '';
+            const cls = getMetricThresholdClass(r.score);
+            const rowBg = isSignificant ? 'style="background: rgba(244,63,94,0.04);"' : '';
             return `
-                <tr ${rowStyle}>
-                    <td>
-                        <strong style="color: var(--text-primary); font-size: 0.88rem;">${r.name}</strong>
-                    </td>
-                    <td>
-                        <span class="spliceai-score-pill ${getMetricThresholdClass(r.score)}">
-                            ${r.score.toFixed(3)}
-                        </span>
-                    </td>
-                    <td style="font-family: var(--font-mono); font-size: 0.88rem; font-weight: 700; color: var(--text-primary);">
-                        ${formatDp(r.dp)}
-                    </td>
-                    <td>
-                        ${getMetricConfidenceBadge(r.score)}
-                    </td>
-                    <td style="font-size: 0.84rem; color: var(--text-secondary); line-height: 1.4;">
-                        ${r.effect}
-                    </td>
+                <tr ${rowBg}>
+                    <td style="font-family: var(--font-mono); font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">${r.label}</td>
+                    <td><span class="spliceai-score-pill ${cls}">${r.score.toFixed(3)}</span></td>
+                    <td style="font-family: var(--font-mono); font-size: 0.88rem; font-weight: 600; color: var(--text-secondary);">${formatDp(r.dp)}</td>
+                    <td style="font-size: 0.82rem; color: var(--text-muted);">${EFFECT_SHORT[r.key]}</td>
                 </tr>
             `;
         }).join('');
@@ -1694,80 +1568,25 @@ async function populateSpliceAIOracle(cardElement, model) {
                     <thead>
                         <tr>
                             <th>Evento</th>
-                            <th>Delta Score (DS)</th>
-                            <th>Delta Posición (DP)</th>
-                            <th>Nivel de Confianza</th>
-                            <th>Consecuencia Prevista</th>
+                            <th>Delta Score</th>
+                            <th>Delta Pos.</th>
+                            <th>Efecto</th>
                         </tr>
                     </thead>
-                    <tbody>
-                        ${tableRowsHtml}
-                    </tbody>
+                    <tbody>${tableRowsHtml}</tbody>
                 </table>
             </div>
 
-            <div class="spliceai-recommendation-box ${isLoss ? 'is-loss' : (isGain ? 'is-gain' : '')}">
-                <div class="spliceai-recommendation-title">
-                    ${pred.recommendation?.title || 'Evaluación de Splicing'}
+            <div class="spliceai-callout ${isLoss ? 'is-loss' : (isGain ? 'is-gain' : '')}">
+                <span class="spliceai-callout-dot"></span>
+                <div style="display: flex; flex-direction: column; gap: 3px;">
+                    <span class="spliceai-callout-text"><strong>${pred.recommendation?.title || 'Evaluación de Splicing'}</strong></span>
+                    <span style="font-size: 0.83rem; color: var(--text-secondary); line-height: 1.4;">
+                        ${isLoss ? 'Se espera que el escenario más probable sea el <strong>Escenario 1 (Salto de Exón)</strong> o el <strong>Escenario 3 (Retención de Intrón)</strong>.' : (isGain ? `Se espera la activación de un sitio críptico (<strong>Escenario 2</strong>, Δ ${pred.recommendation?.deltaPos || 4} pb).` : 'Baja probabilidad de alteración del patrón de splicing canónico.')}
+                    </span>
                 </div>
-                <p class="spliceai-recommendation-text">
-                    ${pred.recommendation?.text || ''}
-                </p>
-                ${isLoss ? `
-                    <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
-                        <button id="btnOracleGoScenario1" class="btn-secondary" style="padding: 6px 14px; font-size: 0.82rem; cursor: pointer;">
-                            Simular Escenario 1 (Salto de Exón)
-                        </button>
-                        <button id="btnOracleGoScenario3" class="btn-secondary" style="padding: 6px 14px; font-size: 0.82rem; cursor: pointer;">
-                            Simular Escenario 3 (Retención de Intrón)
-                        </button>
-                    </div>
-                ` : ''}
-                ${isGain ? `
-                    <div style="margin-top: 12px;">
-                        <button id="btnOracleApplyCryptic" class="btn-secondary" style="padding: 6px 14px; font-size: 0.82rem; cursor: pointer;">
-                            Configurar Escenario 2 con Δ = ${pred.recommendation?.deltaPos || 4} pb
-                        </button>
-                    </div>
-                ` : ''}
             </div>
         `;
-
-        // Wire quick action buttons
-        const btnGoS1 = contentArea.querySelector('#btnOracleGoScenario1');
-        if (btnGoS1) {
-            btnGoS1.addEventListener('click', () => {
-                const tabS1 = document.getElementById('tabScenario1');
-                if (tabS1) tabS1.click();
-                const btnRecalcS1 = document.getElementById('btnRecalcScenario1');
-                if (btnRecalcS1) btnRecalcS1.click();
-            });
-        }
-
-        const btnGoS3 = contentArea.querySelector('#btnOracleGoScenario3');
-        if (btnGoS3) {
-            btnGoS3.addEventListener('click', () => {
-                const tabS3 = document.getElementById('tabScenario3');
-                if (tabS3) tabS3.click();
-                const btnRecalcS3 = document.getElementById('btnRecalcScenario3');
-                if (btnRecalcS3) btnRecalcS3.click();
-            });
-        }
-
-        const btnApplyCryptic = contentArea.querySelector('#btnOracleApplyCryptic');
-        if (btnApplyCryptic) {
-            btnApplyCryptic.addEventListener('click', () => {
-                const tabS2 = document.getElementById('tabScenario2');
-                if (tabS2) tabS2.click();
-                const deltaInput = document.getElementById('crypticDeltaInput');
-                const locSelect = document.getElementById('crypticLocationType');
-                const dp = pred.recommendation?.deltaPos || 4;
-                if (deltaInput) deltaInput.value = Math.abs(dp);
-                if (locSelect) locSelect.value = dp > 0 ? 'intron' : 'exon';
-                const btnRecalcS2 = document.getElementById('btnRecalcScenario2');
-                if (btnRecalcS2) btnRecalcS2.click();
-            });
-        }
 
     } catch (err) {
         console.warn("Error rendering SpliceAI Oracle card:", err);
@@ -1796,15 +1615,10 @@ export function renderConsequenceSimulator(container, model) {
     if (isSplicing) {
         card.innerHTML = `
             <div class="sim-header">
-                <div>
-                    <h3 style="margin: 0 0 4px 0; color: var(--accent-cyan); display: flex; align-items: center; gap: 8px;">
-                        <span>🔬 Simulador de Splicing</span>
-                        <span class="badge badge-warning" style="font-size:0.75rem;">Variante de Splicing</span>
-                    </h3>
-                    <p style="margin: 0; font-size: 0.85rem; color: var(--text-secondary);">
-                        Evalúa de forma interactiva y visual los 3 escenarios biológicos principales cuando se afecta un sitio de empalme.
-                    </p>
-                </div>
+                <h3>
+                    🔬 Simulador de Splicing
+                    <span class="badge badge-warning" style="font-size:0.75rem;">Variante de Splicing</span>
+                </h3>
             </div>
 
             <div class="sim-body" style="margin-top: 16px;">
@@ -1844,11 +1658,6 @@ export function renderConsequenceSimulator(container, model) {
 
                 <!-- ═══════ ESCENARIO 1: SALTO DE EXÓN COMPLETO ═══════ -->
                 <div id="panelScenario1" class="splicing-scenario-panel" style="display: none;">
-                    <div class="scenario-intro-box">
-                        <strong>📌 Escenario 1: Salto de Exón Completo (*Exon Skipping*)</strong><br>
-                        Frente a la pérdida de un sitio dador (+1/+2) o aceptor (-1/-2), el spliceosoma se saltea el exón completo y une el exón previo con el posterior.
-                    </div>
-
                     <div style="margin-bottom: 8px; font-size: 0.85rem; font-weight: 600; color: var(--text-primary);">
                         Selecciona el exón omitido en el ARNm maduro:
                     </div>
@@ -1860,27 +1669,18 @@ export function renderConsequenceSimulator(container, model) {
                         `).join('')}
                     </div>
 
-                    <div style="margin-top: 14px;">
+                    <div style="margin-top: 14px; margin-bottom: 14px;">
                         <button id="btnRecalcScenario1" class="btn-primary">
                             ⚡ Recalcular y Comparar Pistas WT vs Salto de Exón
                         </button>
                     </div>
 
-                    <div id="resultScenario1" class="nmd-decision-box" style="margin-top: 16px;">
-                        <div class="nmd-title"><span>Evaluación Didáctica del Salto de Exón:</span></div>
-                        <p class="nmd-description">Selecciona el exón y presiona calcular para comparar la versión WT frente a la unión modificada.</p>
-                    </div>
-
+                    <div id="resultScenario1" style="display: none;"></div>
                     <div id="scenario1ViewerContainer"></div>
                 </div>
 
                 <!-- ═══════ ESCENARIO 2: ACTIVACIÓN DE SITIOS CRÍPTICOS ═══════ -->
                 <div id="panelScenario2" class="splicing-scenario-panel" style="display: none;">
-                    <div class="scenario-intro-box">
-                        <strong>📌 Escenario 2: Activación de Sitios Crípticos (*Sitios Alternativos*)</strong><br>
-                        El spliceosoma utiliza una secuencia de consenso críptica cercana dentro del exón (deleción parcial) o dentro del intrón (inserción de bases intrónicas). Se visualiza en dos pasos claros: estructura primaria pre-ARNm y empalme mutado con regiones identificadas, mutación visible y traducción.
-                    </div>
-
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-bottom: 14px;">
                         <div class="input-card" style="padding: 12px;">
                             <label style="font-size: 0.82rem; font-weight: 700; color: var(--accent-cyan); display: block; margin-bottom: 6px;">
@@ -1895,49 +1695,32 @@ export function renderConsequenceSimulator(container, model) {
                             <label style="font-size: 0.82rem; font-weight: 700; color: var(--accent-cyan); display: block; margin-bottom: 6px;">
                                 Distancia al Sitio Original (Δ pb):
                             </label>
-                            <div style="display: flex; gap: 8px;">
-                                <input type="number" id="crypticDeltaInput" class="input-field" value="4" min="1" max="500" style="flex: 1;">
-                                <select id="crypticPresets" class="input-field" style="flex: 1.4;">
-                                    <option value="4">+4 pb (Out-of-frame)</option>
-                                    <option value="7">+7 pb (Out-of-frame)</option>
-                                    <option value="12">+12 pb (In-frame, +4 aa)</option>
-                                    <option value="-5">-5 pb (Out-of-frame)</option>
-                                    <option value="-9">-9 pb (In-frame, -3 aa)</option>
-                                </select>
-                            </div>
+                            <input type="number" id="crypticDeltaInput" class="input-field" value="4" min="1" max="500" style="width: 100%;">
                         </div>
                     </div>
 
-                    <button id="btnRecalcScenario2" class="btn-primary">
-                        ⚡ Recalcular y Comparar Pistas WT vs Sitio Críptico
-                    </button>
-
-                    <div id="resultScenario2" class="nmd-decision-box" style="margin-top: 16px;">
-                        <div class="nmd-title"><span>Evaluación Didáctica del Sitio Críptico:</span></div>
-                        <p class="nmd-description">Configura la distancia en pares de bases y presiona recalcular.</p>
+                    <div style="margin-bottom: 14px;">
+                        <button id="btnRecalcScenario2" class="btn-primary">
+                            ⚡ Recalcular y Comparar Pistas WT vs Sitio Críptico
+                        </button>
                     </div>
 
+                    <div id="resultScenario2" style="display: none;"></div>
                     <div id="scenario2ViewerContainer"></div>
                 </div>
 
                 <!-- ═══════ ESCENARIO 3: RETENCIÓN DE INTRÓN COMPLETO ═══════ -->
                 <div id="panelScenario3" class="splicing-scenario-panel" style="display: none;">
-                    <div class="scenario-intro-box">
-                        <strong>📌 Escenario 3: Retención de Intrón (*Intron Retention*)</strong><br>
-                        Fallo completo del reconocimiento de los sitios de corte; el intrón completo se retiene en el ARNm maduro y se traduce de forma continua heredando el marco del exón hasta encontrar el codón de parada prematuro (PTC) en la secuencia.
-                    </div>
                     <div style="margin-bottom: 12px; font-size: 0.85rem; color: var(--text-secondary);">
                         Intrón Retenido: <strong>Intrón ${adjacentIntron ? adjacentIntron.intronNum : 1}</strong> (${adjacentIntron ? adjacentIntron.length.toLocaleString() : 0} pb).
                     </div>
-                    <button id="btnRecalcScenario3" class="btn-primary">
-                        ⚡ Visualizar Retención Intrónica y Búsqueda de Stop en Secuencia
-                    </button>
-
-                    <div id="resultScenario3" class="nmd-decision-box" style="margin-top: 16px;">
-                        <div class="nmd-title"><span>Evaluación de Retención de Intrón:</span></div>
-                        <p class="nmd-description">Presiona el botón superior para calcular y visualizar la traducción continua hacia el intrón hasta el Stop.</p>
+                    <div style="margin-bottom: 14px;">
+                        <button id="btnRecalcScenario3" class="btn-primary">
+                            ⚡ Visualizar Retención Intrónica y Búsqueda de Stop en Secuencia
+                        </button>
                     </div>
 
+                    <div id="resultScenario3" style="display: none;"></div>
                     <div id="scenario3ViewerContainer"></div>
                 </div>
             </div>
@@ -1945,15 +1728,11 @@ export function renderConsequenceSimulator(container, model) {
     } else {
         card.innerHTML = `
             <div class="sim-header">
-                <div>
-                    <h3 style="margin: 0 0 4px 0; color: var(--accent-cyan); display: flex; align-items: center; gap: 8px;">
-                        <span>🔬 Simulador de Marco de Lectura y Codón Stop Prematuro (PTC)</span>
-                        <span class="badge ${variantLocation.type === 'exon' ? 'badge-primary' : 'badge-neutral'}">Variante Exónica</span>
-                    </h3>
-                    <p style="margin: 0; font-size: 0.85rem; color: var(--text-secondary);">
-                        Visualiza los nuevos aminoácidos traducidos en la fase desplazada tras una inserción, deleción o sustitución.
-                    </p>
-                </div>
+                <h3>
+                    🔬 Simulador de Marco de Lectura
+                    <span class="badge ${variantLocation.type === 'exon' ? 'badge-danger' : 'badge-neutral'}" style="font-size:0.75rem;">Variante Exónica</span>
+                </h3>
+                <p>Visualiza los nuevos aminoácidos traducidos en la fase desplazada tras la variante.</p>
             </div>
 
             <div class="sim-body">
@@ -2138,18 +1917,9 @@ export function renderConsequenceSimulator(container, model) {
         // Scenario 2: Cryptic Site Dual Comparison (with strand -1 biological orientation)
         const crypticLoc = card.querySelector('#crypticLocationType');
         const crypticDelta = card.querySelector('#crypticDeltaInput');
-        const crypticPresets = card.querySelector('#crypticPresets');
         const btnS2 = card.querySelector('#btnRecalcScenario2');
         const resS2 = card.querySelector('#resultScenario2');
         const viewerS2 = card.querySelector('#scenario2ViewerContainer');
-
-        if (crypticPresets && crypticDelta && crypticLoc) {
-            crypticPresets.addEventListener('change', () => {
-                const val = parseInt(crypticPresets.value, 10);
-                crypticDelta.value = Math.abs(val);
-                crypticLoc.value = val > 0 ? 'intron' : 'exon';
-            });
-        }
 
         if (btnS2 && resS2) {
             btnS2.addEventListener('click', async () => {
@@ -2166,6 +1936,7 @@ export function renderConsequenceSimulator(container, model) {
                 let seqUpstream = 'CAGTACCAGTTGAC';
                 let seqDownstream = 'TTAGCTGAATTGGAC';
                 let crypticIntronSeq = null;
+                let flankingIntronSeq = null;
                 let variantPosIndex = null;
                 let seqPrevPhase = 0;
                 let seqNextPhase = 0;
@@ -2180,27 +1951,29 @@ export function renderConsequenceSimulator(container, model) {
                     seqPrevPhase = tailInfo.phase; // 0
 
                     if (isIntron) {
-                        let realChunk = "";
+                        const totalFetch = delta + 10;
+                        let raw = "";
                         if (!isAntisense) {
                             const intronStart = donorEx.end + 1;
-                            const intronEnd = intronStart + delta - 1;
-                            let raw = await fetchRegionSequence(chromosome, intronStart, intronEnd);
-                            if (!raw || raw.length === 0) raw = "GTAAGTTCCAGTGAC".substring(0, delta);
+                            const intronEnd = intronStart + totalFetch - 1;
+                            raw = await fetchRegionSequence(chromosome, intronStart, intronEnd);
+                            if (!raw || raw.length === 0) raw = "GTAAGTTCCAGTGACCCAGTGAC";
 
-                            if (variant.pos >= intronStart && variant.pos <= intronEnd) {
+                            if (variant.pos >= intronStart && variant.pos < intronStart + raw.length) {
                                 const chunkOffset = variant.pos - intronStart;
                                 const arr = raw.split('');
                                 arr[chunkOffset] = variant.alt;
                                 raw = arr.join('');
                                 variantPosIndex = seqUpstream.length + chunkOffset;
                             }
-                            realChunk = raw;
+                            crypticIntronSeq = raw.substring(0, delta);
+                            flankingIntronSeq = raw.substring(delta, Math.min(raw.length, delta + 8));
                         } else {
-                            // Antisense: downstream into intron is donorEx.start - 1 down to donorEx.start - delta
-                            const intronStart = donorEx.start - delta;
+                            // Antisense: downstream into intron is donorEx.start - 1 down to donorEx.start - totalFetch
+                            const intronStart = donorEx.start - totalFetch;
                             const intronEnd = donorEx.start - 1;
-                            let raw = await fetchRegionSequence(chromosome, intronStart, intronEnd);
-                            if (!raw || raw.length === 0) raw = "GTAAGTTCCAGTGAC".substring(0, delta);
+                            raw = await fetchRegionSequence(chromosome, intronStart, intronEnd);
+                            if (!raw || raw.length === 0) raw = "GTAAGTTCCAGTGACCCAGTGAC";
 
                             if (variant.pos >= intronStart && variant.pos <= intronEnd) {
                                 const arr = raw.split('');
@@ -2208,9 +1981,10 @@ export function renderConsequenceSimulator(container, model) {
                                 raw = arr.join('');
                                 variantPosIndex = seqUpstream.length + (intronEnd - variant.pos);
                             }
-                            realChunk = reverseComplement(raw);
+                            const rcSeq = reverseComplement(raw);
+                            crypticIntronSeq = rcSeq.substring(0, delta);
+                            flankingIntronSeq = rcSeq.substring(delta, Math.min(rcSeq.length, delta + 8));
                         }
-                        crypticIntronSeq = realChunk;
                     } else {
                         // Exon deletion: check if variant is in deleted exon portion
                         if (!isAntisense) {
@@ -2274,6 +2048,7 @@ export function renderConsequenceSimulator(container, model) {
                         crypticDelta: delta,
                         isIntronCryptic: isIntron,
                         crypticIntronSeq: crypticIntronSeq,
+                        flankingIntronSeq: flankingIntronSeq,
                         variantPosIndex: variantPosIndex,
                         isFrameshift: !inFrame,
                         frameshiftShift: shift,

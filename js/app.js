@@ -20,7 +20,6 @@ const $ = id => document.getElementById(id);
 
 const variantInput = $('variantInput');
 const transcriptInput = $('transcriptInput');
-const variantTypeSelect = $('variantTypeSelect');
 const calculateBtn = $('calculateBtn');
 const presetPills = $('presetPills');
 const themeToggleBtn = $('themeToggleBtn');
@@ -58,11 +57,74 @@ const consequenceDescText = $('consequenceDescText');
 /**
  * Initialization
  */
+// ─── i18n ────────────────────────────────────────────────────────────────────
+const TRANSLATIONS = {
+    es: {
+        'lang-intro':       'Plataforma pedagógica para el análisis molecular de variantes de splicing. Modela la estructura exón-intrón en coordenadas GRCh38, visualiza uniones canónicas a resolución nucleotídica y simula el impacto en el marco de lectura del ARNm.',
+        'lang-step1-label': 'Variante Genómica',
+        'lang-step1-fmt':   '(Chr:Pos Ref>Alt)',
+        'lang-step1-sub':   'Coordenada genómica (Chr:Pos Ref>Alt)',
+        'lang-step2-label': 'Transcripto',
+        'lang-step2-sub':   'Identificador opcional (RefSeq / Ensembl)',
+        'lang-calc-btn':    '⚡ Cargar y Visualizar',
+        'lang-calc-loading':'⏳ Cargando datos desde Ensembl...',
+        'lang-examples-btn':'💡 Ejemplos',
+        'lang-step3-title': 'Mapa de Exones e Intrones',
+        'lang-step3-sub':   'Distribución genómica del transcripto.',
+        'lang-step4-title': 'Visor a Nivel de Bases y Splicing',
+        'lang-step4-sub':   'Regla genómica, pista de aminoácidos, uniones canónicas y marcador de variante.',
+        'lang-step5-title': 'Clasificación del Tipo de Variante',
+        'lang-footer-warn': '⚠️ Aviso Importante: Este asistente es una herramienta educativa de apoyo y no reemplaza el criterio clínico. No cuenta con validación clínica para diagnóstico. Toda clasificación debe ser validada por un profesional habilitado.',
+        'lang-about-btn':   'ℹ️ Acerca de',
+        'lang-theme-btn':   '🌓 Tema',
+        'lang-lang-btn':    'EN',
+    },
+    en: {
+        'lang-intro':       'Educational platform for molecular analysis of splicing variants. Models exon-intron structure in GRCh38 coordinates, visualizes canonical junctions at nucleotide resolution, and simulates the impact on the mRNA reading frame.',
+        'lang-step1-label': 'Genomic Variant',
+        'lang-step1-fmt':   '(Chr:Pos Ref>Alt)',
+        'lang-step1-sub':   'Genomic coordinate (Chr:Pos Ref>Alt)',
+        'lang-step2-label': 'Transcript',
+        'lang-step2-sub':   'Optional identifier (RefSeq / Ensembl)',
+        'lang-calc-btn':    '⚡ Load & Visualize',
+        'lang-calc-loading':'⏳ Loading data from Ensembl...',
+        'lang-examples-btn':'💡 Examples',
+        'lang-step3-title': 'Exon & Intron Map',
+        'lang-step3-sub':   'Genomic distribution of the transcript.',
+        'lang-step4-title': 'Base-Level & Splicing Viewer',
+        'lang-step4-sub':   'Genomic ruler, amino acid track, canonical junctions and variant marker.',
+        'lang-step5-title': 'Variant Type Classification',
+        'lang-footer-warn': '⚠️ Important Notice: This tool is for educational purposes only and does not replace clinical judgment. It has not been clinically validated for diagnosis. All classifications must be validated by a qualified professional.',
+        'lang-about-btn':   'ℹ️ About',
+        'lang-theme-btn':   '🌓 Theme',
+        'lang-lang-btn':    'ES',
+    }
+};
+
+let currentLang = localStorage.getItem('spliceecgenio-lang') || 'es';
+
+function applyLang(lang) {
+    currentLang = lang;
+    localStorage.setItem('spliceecgenio-lang', lang);
+    const t = TRANSLATIONS[lang];
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        if (t[key] !== undefined) el.textContent = t[key];
+    });
+    // Update calculate button (preserves loading state awareness)
+    if (calculateBtn && !state.isLoading) {
+        calculateBtn.innerHTML = `<span data-i18n="lang-calc-btn">${t['lang-calc-btn']}</span>`;
+    }
+    // Update lang toggle button label
+    const langBtn = $('langToggleBtn');
+    if (langBtn) langBtn.innerHTML = `🌐 ${t['lang-lang-btn']}`;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 function init() {
     setupEventListeners();
-    
-    // Auto-run analysis with default example
-    runAnalysis("5:169670598 G>A", "NM_004946.3");
+    applyLang(currentLang);
+    // No auto-run: user must click the button
 }
 
 function setupEventListeners() {
@@ -74,7 +136,11 @@ function setupEventListeners() {
         variantInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') handleCalculateClick();
         });
-        variantInput.addEventListener('input', hideValidationError);
+        variantInput.addEventListener('input', () => {
+            hideValidationError();
+            // Clear transcript field when user changes the variant input
+            if (transcriptInput) transcriptInput.value = '';
+        });
     }
 
     // Preset pills: populate inputs WITHOUT auto-running analysis
@@ -110,17 +176,20 @@ function setupEventListeners() {
         themeToggleBtn.addEventListener('click', toggleTheme);
     }
 
+    const langToggleBtn = $('langToggleBtn');
+    if (langToggleBtn) {
+        langToggleBtn.addEventListener('click', () => {
+            applyLang(currentLang === 'es' ? 'en' : 'es');
+        });
+    }
+
     // Modal Acerca de (Pop-up Overlay)
     window.openAboutModal = (e) => {
         if (e && e.preventDefault) e.preventDefault();
         const modal = document.getElementById('aboutModal');
         if (modal) {
-            if (typeof modal.showModal === 'function') {
-                if (!modal.open) modal.showModal();
-            } else {
-                modal.setAttribute('open', '');
-                modal.style.display = 'flex';
-            }
+            modal.classList.add('active');
+            modal.style.display = 'flex';
         }
     };
 
@@ -128,12 +197,8 @@ function setupEventListeners() {
         if (e && e.preventDefault) e.preventDefault();
         const modal = document.getElementById('aboutModal');
         if (modal) {
-            if (typeof modal.close === 'function') {
-                if (modal.open) modal.close();
-            } else {
-                modal.removeAttribute('open');
-                modal.style.display = 'none';
-            }
+            modal.classList.remove('active');
+            modal.style.display = 'none';
         }
     };
 
@@ -141,13 +206,15 @@ function setupEventListeners() {
         aboutBtn.addEventListener('click', window.openAboutModal);
     }
 
-    if (closeAboutModalBtn) {
-        closeAboutModalBtn.addEventListener('click', window.closeAboutModal);
+    const closeBtn = document.getElementById('closeAboutModal') || document.getElementById('closeAboutModalBtn');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', window.closeAboutModal);
     }
 
-    if (aboutModal) {
-        aboutModal.addEventListener('click', (e) => {
-            if (e.target === aboutModal) {
+    const modalOverlay = document.getElementById('aboutModal');
+    if (modalOverlay) {
+        modalOverlay.addEventListener('click', (e) => {
+            if (e.target === modalOverlay) {
                 window.closeAboutModal(e);
             }
         });
@@ -155,20 +222,20 @@ function setupEventListeners() {
 
     window.addEventListener('keydown', (e) => {
         const modal = document.getElementById('aboutModal');
-        if (e.key === 'Escape' && modal && modal.open) {
+        if (e.key === 'Escape' && modal && (modal.classList.contains('active') || modal.style.display === 'flex')) {
             window.closeAboutModal(e);
         }
     });
 
-    if (copyAliasMpBtn) {
-        copyAliasMpBtn.addEventListener('click', handleCopyAlias);
+    const copyBtn = document.getElementById('copyAliasBtn') || document.getElementById('copyAliasMpBtn');
+    if (copyBtn) {
+        copyBtn.addEventListener('click', handleCopyAlias);
     }
 }
 
 function handleCalculateClick() {
     const vInput = variantInput?.value.trim();
     const txInput = transcriptInput?.value.trim();
-    const typeInput = variantTypeSelect?.value;
 
     const validation = validateGenomicInput(vInput);
     if (!validation.valid) {
@@ -176,7 +243,7 @@ function handleCalculateClick() {
         return;
     }
     hideValidationError();
-    runAnalysis(vInput, txInput, typeInput);
+    runAnalysis(vInput, txInput);
 }
 
 function showValidationError(msg) {
@@ -195,16 +262,17 @@ function hideValidationError() {
 }
 
 async function handleCopyAlias() {
-    const alias = "lorenzo.bioinf.egc";
+    const alias = "lorenzo.erra.mp";
     try {
         await navigator.clipboard.writeText(alias);
     } catch (err) {
         prompt("Copia el Alias de Mercado Pago:", alias);
     }
-    if (copyAliasSuccessMsg) {
-        copyAliasSuccessMsg.style.display = 'block';
+    const successMsg = document.getElementById('copyAliasSuccessMsg');
+    if (successMsg) {
+        successMsg.style.display = 'block';
         setTimeout(() => {
-            copyAliasSuccessMsg.style.display = 'none';
+            successMsg.style.display = 'none';
         }, 3500);
     }
 }
@@ -299,35 +367,30 @@ async function renderAll(model) {
  * Updates consequence cards and badges
  */
 function updateClassificationMetrics(model) {
-    const { variant, variantLocation, geneName, chromosome } = model;
+    const { variant, variantLocation, geneName, chromosome, transcriptId } = model;
 
     let category = "Variante Genómica";
     let subText = "Deducción automática";
     let badgeClass = "badge-warning";
-    let desc = "";
 
     if (variantLocation.type === 'intron') {
         if (variantLocation.isCanonicalSplice) {
             category = "Splicing Canónico";
             subText = `Sitio crítico (${variantLocation.offset})`;
             badgeClass = "badge-danger";
-            desc = `Variante en unión de empalme canónica dinucleótido GT/AG (${variantLocation.name}, offset ${variantLocation.offset}).`;
         } else if (variantLocation.isSpliceSite) {
             category = "Splicing Intrónico";
             subText = `Región yuxta-exónica (${variantLocation.offset})`;
             badgeClass = "badge-warning";
-            desc = `Variante intrónica cercana (${variantLocation.offset} pb de la unión exón-intrón).`;
         } else {
             category = "Intrónica";
             subText = `Profunda (${variantLocation.offset} pb)`;
             badgeClass = "badge-neutral";
-            desc = `Variante en región intrónica profunda.`;
         }
     } else if (variantLocation.type === 'exon') {
         category = "Exónica";
         subText = `${variantLocation.name}`;
         badgeClass = "badge-danger";
-        desc = `Variante dentro de la secuencia codificante del ${variantLocation.name}.`;
     }
 
     if (variantTypeVal) variantTypeVal.textContent = category;
@@ -350,8 +413,13 @@ function updateClassificationMetrics(model) {
     if (consequenceCategoryBadge) {
         consequenceCategoryBadge.innerHTML = `<span class="badge ${badgeClass}">${category}</span>`;
     }
+
+    const locText = variantLocation.offset ? `${variantLocation.name} (${variantLocation.offset})` : variantLocation.name;
+    const txLabel = transcriptId ? ` (${transcriptId})` : '';
+    const desc = `Chr${chromosome}:${variant.pos.toLocaleString()} ${variant.ref} > ${variant.alt}${txLabel} es una Variante <strong>${category}</strong> ${subText}, se localiza en el <strong>${locText}</strong> del gen <strong>${geneName}</strong>.`;
+
     if (consequenceDescText) {
-        consequenceDescText.textContent = desc;
+        consequenceDescText.innerHTML = desc;
     }
 }
 
@@ -372,9 +440,10 @@ function setLoading(isLoading) {
     state.isLoading = isLoading;
     if (calculateBtn) {
         calculateBtn.disabled = isLoading;
-        calculateBtn.innerHTML = isLoading 
-            ? `<span>⏳ Cargando datos desde Ensembl...</span>` 
-            : `<span>⚡ Cargar y Visualizar</span>`;
+        const t = TRANSLATIONS[currentLang];
+        calculateBtn.innerHTML = isLoading
+            ? `<span>${t['lang-calc-loading']}</span>`
+            : `<span data-i18n="lang-calc-btn">${t['lang-calc-btn']}</span>`;
     }
 }
 
