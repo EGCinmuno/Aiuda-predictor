@@ -37,8 +37,8 @@ No requiere configuración compleja ni librerías externas en el servidor. Funci
 
 ### 1. Clonar el repositorio:
 ```bash
-git clone https://github.com/EGCinmuno/SpliceECGenio.git
-cd SpliceECGenio
+git clone https://github.com/EGCinmuno/Aiuda-predictor.git
+cd Aiuda-predictor
 ```
 
 ### 2. Levantar el servidor local:
