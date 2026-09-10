@@ -1,5 +1,5 @@
 {
-  "name": "spliceecgenio",
+  "name": "aiuda-predictor",
   "version": "1.0.0",
   "description": "Explorador Genómico de Exones, Intrones y Simulador Pedagógico de Consecuencias de Variantes y Splicing",
   "type": "module",

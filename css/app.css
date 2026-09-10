@@ -7,21 +7,21 @@
 
 :root {
     color-scheme: dark;
-    /* ── Dark Mode Base: Forest Green / Biotech Terminal ─────────────── */
-    --bg-base: #060c09;
-    --bg-surface: #0c1710;
-    --bg-card: rgba(10, 22, 14, 0.80);
-    --bg-card-hover: rgba(18, 34, 22, 0.90);
-    --bg-card-subtle: rgba(8, 18, 11, 0.65);
-    --bg-glass: rgba(8, 18, 11, 0.70);
+    /* ── Dark Mode Base: Forest Green / Biotech Terminal (Sutilmente menos oscuro) ─────────────── */
+    --bg-base: #0b1712;
+    --bg-surface: #12241c;
+    --bg-card: rgba(18, 36, 28, 0.82);
+    --bg-card-hover: rgba(25, 48, 38, 0.92);
+    --bg-card-subtle: rgba(14, 28, 22, 0.70);
+    --bg-glass: rgba(14, 28, 22, 0.78);
 
-    --border-subtle: rgba(255, 255, 255, 0.07);
-    --border-medium: rgba(255, 255, 255, 0.13);
-    --border-strong: rgba(255, 255, 255, 0.22);
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-medium: rgba(255, 255, 255, 0.15);
+    --border-strong: rgba(255, 255, 255, 0.24);
 
     --text-primary: #edfaf3;
-    --text-secondary: #8bb8a0;
-    --text-muted: #4d7a60;
+    --text-secondary: #9eceb4;
+    --text-muted: #5e9173;
     --text-inverse: #060c09;
 
     /* Primary accent: teal-emerald (replaces cyan) */
@@ -55,8 +55,8 @@
     --transition-smooth: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 
     /* Aliases for Modal compatibility */
-    --bg-2: #0c1710;
-    --bg-3: rgba(18, 34, 22, 0.75);
+    --bg-2: #12241c;
+    --bg-3: rgba(25, 48, 38, 0.80);
     --border: var(--border-medium);
     --border-hl: var(--border-strong);
     --text-1: var(--text-primary);
@@ -131,8 +131,8 @@ body {
     min-height: 100vh;
     overflow-x: hidden;
     background-image:
-        radial-gradient(at 10% 0%, rgba(27, 228, 160, 0.07) 0px, transparent 55%),
-        radial-gradient(at 90% 100%, rgba(167, 139, 250, 0.06) 0px, transparent 55%);
+        radial-gradient(at 10% 0%, rgba(27, 228, 160, 0.11) 0px, transparent 60%),
+        radial-gradient(at 90% 100%, rgba(167, 139, 250, 0.08) 0px, transparent 60%);
     background-attachment: fixed;
 }
 
@@ -3229,6 +3229,28 @@ body {
     min-width: 300px;
 }
 
+/* Scenario 2 Step 1 Side-by-Side Columns */
+.scenario2-step1-columns {
+    display: flex;
+    gap: 16px;
+    width: 100%;
+    flex-wrap: wrap;
+    align-items: flex-start;
+}
+
+.scenario2-step1-columns .track-named-box {
+    width: fit-content;
+}
+
+.spliceai-choose-prompt {
+    text-align: center;
+    margin: 20px auto 12px auto;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--accent-cyan);
+    letter-spacing: 0.02em;
+}
+
 /* ═══════════════════════════════════════════════════════════
    JUNCTION AMINO ACID HIGHLIGHT (Nuevo Codón / aa de Unión)
    ═══════════════════════════════════════════════════════════ */
@@ -3412,3 +3434,57 @@ body {
     font-weight: 600;
     line-height: 1.4;
 }
+
+.spliceai-choose-prompt {
+    text-align: center;
+    margin: 20px auto 12px auto;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--accent-cyan);
+    letter-spacing: 0.2px;
+}
+
+/* Cascading layout for Splicing Scenarios (Scenario 1 & 2) */
+.scenario1-cascade-container,
+.scenario2-cascade-container {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    width: 100%;
+}
+
+.scenario1-row,
+.scenario2-row {
+    display: flex;
+    width: 100%;
+}
+
+.scenario1-row--left,
+.scenario2-row--left {
+    justify-content: flex-start;
+}
+
+.scenario1-row--center {
+    justify-content: center;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+.scenario1-row--right,
+.scenario2-row--right {
+    justify-content: flex-end;
+}
+
+.scenario1-row--right > div,
+.scenario2-row--right > div {
+    max-width: fit-content;
+}
+
+@media (max-width: 768px) {
+    .scenario1-row--right,
+    .scenario2-row--right {
+        justify-content: flex-start;
+    }
+}
+

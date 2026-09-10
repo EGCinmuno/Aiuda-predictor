@@ -60,40 +60,40 @@ const consequenceDescText = $('consequenceDescText');
 // ─── i18n ────────────────────────────────────────────────────────────────────
 const TRANSLATIONS = {
     es: {
-        'lang-intro':       'Plataforma pedagógica para el análisis molecular de variantes de splicing. Modela la estructura exón-intrón en coordenadas GRCh38, visualiza uniones canónicas a resolución nucleotídica y simula el impacto en el marco de lectura del ARNm.',
+        'lang-intro':       'Plataforma pedagógica para el análisis molecular de variantes. Visualizá tu variante en el gen en el Paso 2, a nivel de bases en el Paso 3, y predecí a nivel de bases como sera el nuevo marco de lectura en el Paso 4.',
         'lang-step1-label': 'Variante Genómica',
         'lang-step1-fmt':   '(Chr:Pos Ref>Alt)',
         'lang-step1-sub':   'Coordenada genómica (Chr:Pos Ref>Alt)',
-        'lang-step2-label': 'Transcripto',
+        'lang-step2-label': 'Transcripto (Opcional)',
         'lang-step2-sub':   'Identificador opcional (RefSeq / Ensembl)',
         'lang-calc-btn':    '⚡ Cargar y Visualizar',
         'lang-calc-loading':'⏳ Cargando datos desde Ensembl...',
         'lang-examples-btn':'💡 Ejemplos',
-        'lang-step3-title': 'Mapa de Exones e Intrones',
-        'lang-step3-sub':   'Distribución genómica del transcripto.',
-        'lang-step4-title': 'Visor a Nivel de Bases y Splicing',
-        'lang-step4-sub':   'Regla genómica, pista de aminoácidos, uniones canónicas y marcador de variante.',
-        'lang-step5-title': 'Clasificación del Tipo de Variante',
+        'lang-step2-title': 'Mapa de Exones e Intrones',
+        'lang-step2-sub':   'Visualizá tu variante en la estructura genómica del transcripto.',
+        'lang-step3-title': 'Visor a Nivel de Bases y Splicing',
+        'lang-step3-sub':   'Explorá a nivel de bases: regla genómica, pista de aminoácidos, uniones canónicas y marcador de variante.',
+        'lang-step4-title': 'Clasificación y Predicción de la Variante',
         'lang-footer-warn': '⚠️ Aviso Importante: Este asistente es una herramienta educativa de apoyo y no reemplaza el criterio clínico. No cuenta con validación clínica para diagnóstico. Toda clasificación debe ser validada por un profesional habilitado.',
         'lang-about-btn':   'ℹ️ Acerca de',
         'lang-theme-btn':   '🌓 Tema',
         'lang-lang-btn':    'EN',
     },
     en: {
-        'lang-intro':       'Educational platform for molecular analysis of splicing variants. Models exon-intron structure in GRCh38 coordinates, visualizes canonical junctions at nucleotide resolution, and simulates the impact on the mRNA reading frame.',
+        'lang-intro':       'Educational platform for molecular analysis of variants. Visualize your variant in the gene in Step 2, at base-level in Step 3, and predict at base-level how the new reading frame will be in Step 4.',
         'lang-step1-label': 'Genomic Variant',
         'lang-step1-fmt':   '(Chr:Pos Ref>Alt)',
         'lang-step1-sub':   'Genomic coordinate (Chr:Pos Ref>Alt)',
-        'lang-step2-label': 'Transcript',
+        'lang-step2-label': 'Transcript (Optional)',
         'lang-step2-sub':   'Optional identifier (RefSeq / Ensembl)',
         'lang-calc-btn':    '⚡ Load & Visualize',
         'lang-calc-loading':'⏳ Loading data from Ensembl...',
         'lang-examples-btn':'💡 Examples',
-        'lang-step3-title': 'Exon & Intron Map',
-        'lang-step3-sub':   'Genomic distribution of the transcript.',
-        'lang-step4-title': 'Base-Level & Splicing Viewer',
-        'lang-step4-sub':   'Genomic ruler, amino acid track, canonical junctions and variant marker.',
-        'lang-step5-title': 'Variant Type Classification',
+        'lang-step2-title': 'Exon & Intron Map',
+        'lang-step2-sub':   'Visualize your variant in the transcript genomic structure.',
+        'lang-step3-title': 'Base-Level & Splicing Viewer',
+        'lang-step3-sub':   'Explore at base-level: genomic ruler, amino acid track, canonical junctions and variant marker.',
+        'lang-step4-title': 'Variant Classification and Prediction',
         'lang-footer-warn': '⚠️ Important Notice: This tool is for educational purposes only and does not replace clinical judgment. It has not been clinically validated for diagnosis. All classifications must be validated by a qualified professional.',
         'lang-about-btn':   'ℹ️ About',
         'lang-theme-btn':   '🌓 Theme',
@@ -101,11 +101,11 @@ const TRANSLATIONS = {
     }
 };
 
-let currentLang = localStorage.getItem('spliceecgenio-lang') || 'es';
+let currentLang = localStorage.getItem('aiuda-lang') || localStorage.getItem('spliceecgenio-lang') || 'es';
 
 function applyLang(lang) {
     currentLang = lang;
-    localStorage.setItem('spliceecgenio-lang', lang);
+    localStorage.setItem('aiuda-lang', lang);
     const t = TRANSLATIONS[lang];
     document.querySelectorAll('[data-i18n]').forEach(el => {
         const key = el.getAttribute('data-i18n');
@@ -330,7 +330,7 @@ async function renderAll(model) {
 
     // 1. Header Info
     if (geneTitleDisplay) {
-        geneTitleDisplay.innerHTML = `<span class="step-badge">Paso 3</span> ${geneName} (${transcriptId}) — Mapa de Exones e Intrones`;
+        geneTitleDisplay.innerHTML = `<span class="step-badge">Paso 2</span> ${geneName} (${transcriptId}) — Mapa de Exones e Intrones`;
     }
     if (geneSubDetailsDisplay) {
         geneSubDetailsDisplay.textContent = `Chr ${chromosome} (${strand}) | Coordenadas Genómicas: ${start.toLocaleString()}..${end.toLocaleString()} (${(end - start + 1).toLocaleString()} pb) | ${exons.length} Exones | ${introns.length} Intrones`;
@@ -339,7 +339,7 @@ async function renderAll(model) {
         variantBadgeTop.innerHTML = `<span class="badge ${variantLocation.isSpliceSite ? 'badge-warning' : 'badge-danger'}">Chr${chromosome}:${variant.pos} ${variant.ref}>${variant.alt}</span>`;
     }
 
-    // 2. Paso 3: Mapa General de Exones e Intrones
+    // 2. Paso 2: Mapa General de Exones e Intrones (Visualiza tu variante en el gen)
     if (exonMapContainer) {
         renderGenomicExonMap(exonMapContainer, model, async (targetPos) => {
             if (genooxViewerContainer) {
@@ -349,15 +349,15 @@ async function renderAll(model) {
         });
     }
 
-    // 3. Paso 4: Visor a Nivel de Bases (WT default)
+    // 3. Paso 3: Visor a Nivel de Bases (A nivel de bases)
     if (genooxViewerContainer) {
         await renderFranklinBaseViewer(genooxViewerContainer, model, variant.pos);
     }
 
-    // 4. Paso 5: Clasificación y Métricas
+    // 4. Paso 4: Clasificación y Predicción de la Variante (Predecí qué pasará)
     updateClassificationMetrics(model);
 
-    // 5. Paso 6: Simulador de Consecuencia y Recálculo de Marco
+    // 5. Simulador de Splicing / Marco de Lectura
     if (consequenceSimContainer) {
         renderConsequenceSimulator(consequenceSimContainer, model);
     }

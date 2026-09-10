@@ -194,7 +194,7 @@ export function renderGenomicExonMap(container, model, onRegionClick = null) {
                 </button>
             </div>
             <button id="toggleExonTableBtn" class="btn-secondary" style="padding: 6px 14px; font-size: 0.8rem; cursor: pointer;">
-                🔽 Plegar Tabla de Exones
+                ▶ Desplegar Tabla de Exones
             </button>
         </div>
     `;
@@ -331,10 +331,11 @@ export function renderGenomicExonMap(container, model, onRegionClick = null) {
 
     wrapper.appendChild(trackWrap);
 
-    // Detailed Table
+    // Detailed Table (Collapsed by default)
     const tableWrap = document.createElement('div');
     tableWrap.id = 'exonDetailsTableContainer';
     tableWrap.className = 'exon-table';
+    tableWrap.style.display = 'none';
     tableWrap.innerHTML = `
         <table>
             <thead>
@@ -344,7 +345,7 @@ export function renderGenomicExonMap(container, model, onRegionClick = null) {
                     <th>Fin Genómico</th>
                     <th>Tamaño</th>
                     <th>Fase de Lectura</th>
-                    <th>Navegación al Visor (Paso 4)</th>
+                    <th>Navegación al Visor (Paso 3)</th>
                 </tr>
             </thead>
             <tbody>
@@ -1307,8 +1308,9 @@ export function renderComparisonSplicingViewer(containerEl, {
     // ─────────────────────────────────────────────────────────────
     else if (mode === 'cryptic') {
         const dNum = prevExon ? prevExon.exonNum : 1;
-        const aNum = nextExon ? nextExon.exonNum : 2;
+        const aNum = nextExon ? nextExon.exonNum : (dNum + 1);
         const donorPhase = seqPrevPhase !== null ? seqPrevPhase : 0;
+        const nextPhase = seqNextPhase !== null ? seqNextPhase : (nextExon?.phase ?? 0);
 
         if (isIntronCryptic) {
             const crypticIntronChunk = crypticIntronSeq || ("GTAAGTTCCAGTGAC").substring(0, crypticDelta);
@@ -1320,6 +1322,14 @@ export function renderComparisonSplicingViewer(containerEl, {
                 `<span class="badge" style="background:rgba(148,163,184,0.18);border:1px solid #64748b;color:#cbd5e1;">🧬 1. Estructura Primaria (Genómica / Pre-ARNm)</span>`,
                 `Límite canónico original inactivado y fragmento intrónico retenido (+${crypticDelta} pb)`
             );
+
+            const step1Flex = document.createElement('div');
+            step1Flex.className = 'scenario2-cascade-container';
+
+            // Fila 1 A la izquierda: Estructura primaria con corte críptico
+            const row1 = document.createElement('div');
+            row1.className = 'scenario2-row scenario2-row--left';
+
             const rawTrack = renderSynchronizedGridTrack([
                 { seq: seqPrev,            label: `Exón ${dNum} Dador`,              type: 'exon',   startPhase: donorPhase },
                 { seq: crypticIntronChunk, label: `+${crypticDelta} pb Retenidas`,   type: 'intron', startPhase: null },
@@ -1331,14 +1341,33 @@ export function renderComparisonSplicingViewer(containerEl, {
                 variantRef: variant.ref,
                 variantAlt: variant.alt
             });
-            step1Card.appendChild(makeNamedBox('',
+            const leftBox = makeNamedBox('',
                 `<span>[ Exón <strong>${dNum}</strong> Dador ] ──► <span style="color:#c084fc;">[ +${crypticDelta} pb Intrónicas retenidas ]</span> ──► ⚡ Sitio Críptico</span>
                  <div style="display:flex;gap:6px;">
                    <span class="site-tag original-site-tag">📍 Límite Original Inactivado</span>
                    <span class="site-tag new-site-tag">⚡ Sitio Críptico</span>
                  </div>`,
                 rawTrack
-            ));
+            );
+            row1.appendChild(leftBox);
+            step1Flex.appendChild(row1);
+
+            // Fila 2 A la derecha: [ Inicio Exón Aceptor ] Fase N
+            const row2 = document.createElement('div');
+            row2.className = 'scenario2-row scenario2-row--right';
+
+            const ex2Track = renderSynchronizedGridTrack(
+                [{ seq: seqNext, label: `Exón ${aNum}`, type: 'exon', startPhase: nextPhase }],
+                { junctionIndexes: [] }
+            );
+            const rightBox = makeNamedBox('',
+                `<span>[ Inicio Exón <strong>${aNum}</strong> ] Fase ${nextPhase}</span>`,
+                ex2Track
+            );
+            row2.appendChild(rightBox);
+            step1Flex.appendChild(row2);
+
+            step1Card.appendChild(step1Flex);
             wrap.appendChild(step1Card);
 
             // ── PASO 2: EMPALME MUTADO (ARNM ENSAMBLADO Y TRADUCIDO) ──
@@ -1376,6 +1405,14 @@ export function renderComparisonSplicingViewer(containerEl, {
                 `<span class="badge" style="background:rgba(148,163,184,0.18);border:1px solid #64748b;color:#cbd5e1;">🧬 1. Estructura Primaria del Exón Dador</span>`,
                 `Sitio críptico interno: ${crypticDelta} pb exónicas serán excluidas del ARNm maduro`
             );
+
+            const step1Flex = document.createElement('div');
+            step1Flex.className = 'scenario2-cascade-container';
+
+            // Fila 1 A la izquierda
+            const row1 = document.createElement('div');
+            row1.className = 'scenario2-row scenario2-row--left';
+
             const rawTrack = renderSynchronizedGridTrack([
                 { seq: keptSeq, label: `Exón ${dNum} Conservado`, type: 'exon', startPhase: donorPhase },
                 { seq: seqPrev.substring(keptLen), label: `Eliminado (-${crypticDelta} pb)`, type: 'deleted', startPhase: null }
@@ -1386,11 +1423,30 @@ export function renderComparisonSplicingViewer(containerEl, {
                 variantRef: variant.ref,
                 variantAlt: variant.alt
             });
-            step1Card.appendChild(makeNamedBox('',
+            const leftBox = makeNamedBox('',
                 `<span>[ Exón <strong>${dNum}</strong> ] ──► ✂ Sitio Críptico Interno (−${crypticDelta} pb)</span>
                  <span class="site-tag new-site-tag">✂ Corte Interno</span>`,
                 rawTrack
-            ));
+            );
+            row1.appendChild(leftBox);
+            step1Flex.appendChild(row1);
+
+            // Fila 2 A la derecha
+            const row2 = document.createElement('div');
+            row2.className = 'scenario2-row scenario2-row--right';
+
+            const ex2Track = renderSynchronizedGridTrack(
+                [{ seq: seqNext, label: `Exón ${aNum}`, type: 'exon', startPhase: nextPhase }],
+                { junctionIndexes: [] }
+            );
+            const rightBox = makeNamedBox('',
+                `<span>[ Inicio Exón <strong>${aNum}</strong> ] Fase ${nextPhase}</span>`,
+                ex2Track
+            );
+            row2.appendChild(rightBox);
+            step1Flex.appendChild(row2);
+
+            step1Card.appendChild(step1Flex);
             wrap.appendChild(step1Card);
 
             // Paso 2
@@ -1605,7 +1661,12 @@ export function renderConsequenceSimulator(container, model) {
     container.innerHTML = '';
 
     const { exons, introns, chromosome, variant, variantLocation } = model;
-    const isSplicing = variantLocation.type === 'intron' || variantLocation.isSpliceSite;
+    const isSplicing = Boolean(
+        variantLocation.isCanonicalSplice ||
+        variantLocation.isSpliceSite ||
+        (variantLocation.type === 'intron' && variantLocation.offsetBp !== undefined && Math.abs(variantLocation.offsetBp) <= 20) ||
+        (variantLocation.type === 'exon' && variantLocation.isSpliceSite)
+    );
     const affectedExonNum = variantLocation.exon?.exonNum || variantLocation.intron?.donorExon || 1;
     const adjacentIntron = variantLocation.intron || introns.find(i => i.donorExon === affectedExonNum) || introns[0];
 
@@ -1637,6 +1698,11 @@ export function renderConsequenceSimulator(container, model) {
                     </div>
                 </div>
 
+                <!-- Centered Prompt for Scenario Selection -->
+                <div class="spliceai-choose-prompt" style="text-align: center; margin: 20px auto 12px auto; font-size: 0.95rem; font-weight: 700; color: var(--accent-cyan);">
+                    👉 Elegí qué escenario de splicing querés simular y visualizar:
+                </div>
+
                 <!-- Scenario Selector Tabs -->
                 <div class="splicing-scenario-tabs">
                     <button class="scenario-tab-btn" id="tabScenario1" data-scenario="1">
@@ -1648,12 +1714,6 @@ export function renderConsequenceSimulator(container, model) {
                     <button class="scenario-tab-btn" id="tabScenario3" data-scenario="3">
                         3. Retención de Intrón Completo
                     </button>
-                </div>
-
-                <!-- Initial prompt when no scenario is selected -->
-                <div id="noScenarioSelectedBox" class="nmd-decision-box" style="margin-top: 16px;">
-                    <div class="nmd-title"><span>👉 Selecciona un escenario de splicing:</span></div>
-                    <p class="nmd-description">Haz clic en cualquiera de los 3 botones superiores (<strong>Salto de Exón</strong>, <strong>Sitio Críptico</strong> o <strong>Retención de Intrón</strong>) para desplegar sus parámetros y simulador.</p>
                 </div>
 
                 <!-- ═══════ ESCENARIO 1: SALTO DE EXÓN COMPLETO ═══════ -->
@@ -1725,6 +1785,25 @@ export function renderConsequenceSimulator(container, model) {
                 </div>
             </div>
         `;
+    } else if (variantLocation.type === 'intron') {
+        card.innerHTML = `
+            <div class="sim-header">
+                <h3>
+                    🔬 Consecuencia de Variante Intrónica
+                    <span class="badge badge-neutral" style="font-size:0.75rem;">Intrónico Profundo</span>
+                </h3>
+                <p>Variante localizada en región intrónica no canónica (${variantLocation.offset || ''}).</p>
+            </div>
+
+            <div class="sim-body">
+                <div class="nmd-decision-box" style="margin-top: 10px;">
+                    <div class="nmd-title"><span>ℹ️ Sin Alteración de Sitios Canónicos de Splicing</span></div>
+                    <p class="nmd-description">
+                        La variante se ubica a <strong>${Math.abs(variantLocation.offsetBp || 0)} pb</strong> de la unión exón-intrón más cercana. No altera los dinucleótidos esenciales del dador (GT) ni del aceptor (AG), ni la región de consenso proximal.
+                    </p>
+                </div>
+            </div>
+        `;
     } else {
         card.innerHTML = `
             <div class="sim-header">
@@ -1783,7 +1862,6 @@ export function renderConsequenceSimulator(container, model) {
             { btn: card.querySelector('#tabScenario2'), panel: card.querySelector('#panelScenario2') },
             { btn: card.querySelector('#tabScenario3'), panel: card.querySelector('#panelScenario3') }
         ];
-        const placeholder = card.querySelector('#noScenarioSelectedBox');
 
         tabs.forEach(({ btn, panel }) => {
             if (btn && panel) {
@@ -1793,13 +1871,10 @@ export function renderConsequenceSimulator(container, model) {
                         t.btn?.classList.remove('active');
                         if (t.panel) t.panel.style.display = 'none';
                     });
-                    if (placeholder) placeholder.style.display = 'none';
 
                     if (!isAlreadyActive) {
                         btn.classList.add('active');
                         panel.style.display = 'block';
-                    } else if (placeholder) {
-                        placeholder.style.display = 'block';
                     }
                 });
             }

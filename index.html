@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SpliceECGenio - Explorador Genómico de Exones, Intrones y Consecuencias de Variantes</title>
+    <title>Aiuda-predictor - Explorador Genómico de Exones, Intrones y Consecuencias de Variantes</title>
     <meta name="description"
         content="Herramienta bioinformática para descargar la estructura genómica completa (exones e intrones) desde Ensembl y visualizar variantes genómicas a nivel macro y micro.">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -19,7 +19,7 @@
             <div class="brand-section">
                 <div class="brand-logo">🧬</div>
                 <div class="brand-titles">
-                    <h1>SpliceECGenio <span style="font-size: 0.9rem; font-weight: 400; opacity: 0.8;"></span></h1>
+                    <h1>Aiuda-predictor <span style="font-size: 0.9rem; font-weight: 400; opacity: 0.8;"></span></h1>
                 </div>
             </div>
             <div class="header-actions">
@@ -34,11 +34,7 @@
         </header>
 
         <div class="app-intro-banner">
-            <p><span data-i18n="lang-intro">Plataforma pedagógica para el análisis molecular de variantes de splicing.
-                    Modela la
-                    estructura exón-intrón en coordenadas GRCh38, visualiza uniones canónicas a resolución nucleotídica
-                    y
-                    simula el impacto en el marco de lectura del ARNm.</span></p>
+            <p><span data-i18n="lang-intro">Plataforma pedagógica para el análisis molecular de variantes. Visualizá tu variante en el gen en el <strong>Paso 2</strong>, a nivel de bases en el <strong>Paso 3</strong>, y predecí a nivel de bases como sera el nuevo marco de lectura en el <strong>Paso 4</strong>.</span></p>
         </div>
 
         <!-- Step 1 & Step 2 Input Section -->
@@ -62,10 +58,9 @@
             <div class="input-card">
                 <div class="input-label-group">
                     <label for="transcriptInput" class="input-label">
-                        <span class="step-badge">Paso 2 (Opcional)</span>
-                        <span data-i18n="lang-step2-label">Transcripto</span>
+                        <span class="step-badge">Paso 1</span>
+                        <span data-i18n="lang-step2-label">Transcripto (Opcional)</span>
                     </label>
-                    <!-- <span class="input-subtext" data-i18n="lang-step2-sub">Identificador opcional (RefSeq / Ensembl)</span> -->
                 </div>
                 <div class="search-input-wrapper">
                     <input type="text" id="transcriptInput" class="input-field" placeholder="ej. NM_004946.3 (Opcional)"
@@ -122,18 +117,17 @@
         <!-- Main Dashboard Steps (Hidden until calculation) -->
         <main class="dashboard-grid" id="dashboardGrid" style="display: none; flex-direction: column; gap: 24px;">
 
-            <!-- Step 3: Exon & Intron Map (Macro View) -->
+            <!-- Step 2: Exon & Intron Map (Macro View - Visualiza tu variante en el gen) -->
             <div class="card" id="transcriptCard">
                 <div class="card-header">
                     <div class="card-title-group">
                         <div class="card-icon">🗺️</div>
                         <div>
                             <h3 class="card-title" id="geneTitleDisplay">
-                                <span class="step-badge">Paso 3</span> <span data-i18n="lang-step3-title">Mapa de Exones
+                                <span class="step-badge">Paso 2</span> <span data-i18n="lang-step2-title">Mapa de Exones
                                     e Intrones</span>
                             </h3>
-                            <p class="input-subtext" id="geneSubDetailsDisplay" data-i18n="lang-step3-sub">Distribución
-                                genómica del transcripto.
+                            <p class="input-subtext" id="geneSubDetailsDisplay" data-i18n="lang-step2-sub">Visualizá tu variante en la estructura genómica del transcripto.
                             </p>
                         </div>
                     </div>
@@ -148,17 +142,17 @@
                 </div>
             </div>
 
-            <!-- Step 4: Sequence & Exon Junction Viewer -->
+            <!-- Step 3: Sequence & Exon Junction Viewer (A nivel de bases) -->
             <div class="card" id="genooxViewerCard">
                 <div class="card-header">
                     <div class="card-title-group">
                         <div class="card-icon">🔬</div>
                         <div>
                             <h2 class="card-title">
-                                <span class="step-badge">Paso 4</span> <span data-i18n="lang-step4-title">Visor a Nivel
+                                <span class="step-badge">Paso 3</span> <span data-i18n="lang-step3-title">Visor a Nivel
                                     de Bases y Splicing</span>
                             </h2>
-                            <p class="input-subtext" data-i18n="lang-step4-sub">Regla genómica, pista de aminoácidos,
+                            <p class="input-subtext" data-i18n="lang-step3-sub">Explorá a nivel de bases: regla genómica, pista de aminoácidos,
                                 uniones canónicas y marcador
                                 de variante.</p>
                         </div>
@@ -171,13 +165,13 @@
                 </div>
             </div>
 
-            <!-- Step 5: Consequence Metrics and Biological Classification -->
+            <!-- Step 4: Consequence Metrics and Biological Classification (Predecí qué pasará con la variante) -->
             <div class="card" id="step5Card">
                 <div class="card-header">
                     <div class="card-title-group">
                         <div class="card-icon">⚙️</div>
                         <h3 class="card-title">
-                            <span class="step-badge">Paso 5</span> <span data-i18n="lang-step5-title">Clasificación del Tipo de Variante</span>
+                            <span class="step-badge">Paso 4</span> <span data-i18n="lang-step4-title">Clasificación y Predicción de la Variante</span>
                         </h3>
                     </div>
                     <div id="consequenceCategoryBadge">
@@ -193,7 +187,7 @@
                 </div>
             </div>
 
-            <!-- Step 6: Interactive Consequence & Reading Frame Simulator (Includes SpliceAI Oracle) -->
+            <!-- Interactive Consequence & Reading Frame / Splicing Simulator (Includes SpliceAI Oracle) -->
             <div id="consequenceSimContainer">
                 <!-- Rendered dynamically for Splicing / Frameshift -->
             </div>
@@ -221,14 +215,14 @@
     <div id="aboutModal" class="modal-overlay">
         <div class="modal-card modal-card--about">
             <div class="modal-header">
-                <h2><i class="fa-solid fa-dna"></i> Acerca del Asistente</h2>
+                <h2><i class="fa-solid fa-dna"></i> Acerca de Aiuda-predictor</h2>
                 <button id="closeAboutModal" class="close-modal" title="Cerrar">&times;</button>
             </div>
             <div class="modal-body">
                 <!-- Presentación del asistente -->
                 <div class="about-hero">
                     <div class="about-intro">
-                        <h3>¡Hola! Soy tu Asistente de Splicing</h3>
+                        <h3>¡Hola! Soy tu Asistente de Splicing y Genómica Clínica</h3>
                         <p>Fui desarrollado para apoyar el aprendizaje y la práctica en genómica clínica, ayudando a visualizar el impacto de las variantes en el marco de lectura.</p>
                     </div>
                 </div>
@@ -252,7 +246,7 @@
                     <p>¿Encontraste un error, tenés una sugerencia o querés colaborar con el proyecto?
                         Tu feedback ayuda a mejorar la herramienta para toda la comunidad.</p>
                     <div class="about-actions">
-                        <a href="mailto:lorenzoerra@gmail.com?subject=Feedback%20SpliceECGenio" target="_blank" class="about-btn about-btn--primary">
+                        <a href="mailto:lorenzoerra@gmail.com?subject=Feedback%20Aiuda-predictor" target="_blank" class="about-btn about-btn--primary">
                             <i class="fa-solid fa-envelope"></i> Enviar Feedback
                         </a>
                         <button type="button" id="copyAliasBtn" class="about-btn about-btn--coffee" title="Copiar alias lorenzo.erra.mp">
