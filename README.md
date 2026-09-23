@@ -66,5 +66,4 @@ Accede a `http://localhost:8080`.
 
 ## 📄 Licencia
 
-Este proyecto está bajo la Licencia MIT.
-Desarrollado para **EGC Inmunogenética**.
+Desarrollado para **EGC**.
