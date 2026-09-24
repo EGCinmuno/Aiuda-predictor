@@ -937,6 +937,7 @@ export function renderSynchronizedGridTrack(segments = [], {
     variantPosIndex = null,
     variantRef = 'N',
     variantAlt = 'N',
+    isWtTrack = false,
     junctionIndexes = []
 } = {}) {
 
@@ -962,7 +963,6 @@ export function renderSynchronizedGridTrack(segments = [], {
     viewport.className = 'franklin-viewport sync-grid-viewport';
     viewport.style.position = 'relative';
 
-    let gIdx = 0; // global index into chars[]
     let rollingPhase = 0;
     let stopCutoffIndex = null;
 
@@ -1082,24 +1082,80 @@ export function renderSynchronizedGridTrack(segments = [], {
     baseTrack.style.display = 'grid';
     baseTrack.style.gridTemplateColumns = `repeat(${finalLen}, 32px)`;
 
+    const refStr = (variantRef || 'N').toUpperCase();
+    const altStr = (variantAlt || 'N').toUpperCase();
+    const refSpan = Math.max(1, refStr.length);
+    const altSpan = Math.max(1, altStr.length);
+
     for (let i = 0; i < finalLen; i++) {
         const ch = chars[i];
         const b = ch.base;
         const color = BASE_COLORS[b] || '#fff';
-        const isVar = (i === variantPosIndex);
         const isIntron = (ch.type === 'intron');
         const isDeleted = (ch.type === 'deleted');
+
+        let isVar = false;
+        let badgeHtml = null;
+        let spanClass = '';
+
+        if (variantPosIndex !== null) {
+            if (isWtTrack) {
+                // WT Track: Highlight reference allele base(s) using Step 3 green badge
+                if (i >= variantPosIndex && i < variantPosIndex + refSpan) {
+                    isVar = true;
+                    spanClass = 'is-variant-wt-span';
+                    const offset = i - variantPosIndex;
+                    const wtChar = (offset < refStr.length) ? refStr[offset] : b;
+                    badgeHtml = `<span class="f-variant-badge wt-badge" title="Base WT implicada en la variante (${refStr} > ${altStr}) [Base ${offset + 1} de ${refSpan}]: ${wtChar}">${wtChar}</span>`;
+                }
+            } else {
+                // Mutant Track: Highlight mutated base(s) matching Step 3 styling
+                if (refStr.length > altStr.length) {
+                    // Deletion
+                    if (i >= variantPosIndex && i < variantPosIndex + Math.max(1, altStr.length)) {
+                        isVar = true;
+                        spanClass = 'is-variant-mut-span';
+                        const offset = i - variantPosIndex;
+                        const altChar = (offset < altStr.length) ? altStr[offset] : b;
+                        badgeHtml = `<span class="f-variant-badge del-badge" title="Deleción mutada (${refStr} > ${altStr}) [Δ -${refStr.length - altStr.length} pb]: ${altChar}">${altChar}</span>`;
+                    }
+                } else if (refStr.length < altStr.length) {
+                    // Insertion
+                    if (i >= variantPosIndex && i < variantPosIndex + altStr.length) {
+                        isVar = true;
+                        spanClass = 'is-variant-mut-span';
+                        const offset = i - variantPosIndex;
+                        const altChar = (offset < altStr.length) ? altStr[offset] : b;
+                        if (offset >= refStr.length) {
+                            badgeHtml = `<span class="f-variant-badge ins-badge" title="Inserción mutada (+${altStr.slice(refStr.length)}): ${altChar}">+${altChar}</span>`;
+                        } else {
+                            badgeHtml = `<span class="f-variant-badge mut-badge" title="Base mutada: ${altChar}">${altChar}</span>`;
+                        }
+                    }
+                } else {
+                    // Substitution
+                    if (i >= variantPosIndex && i < variantPosIndex + altSpan) {
+                        isVar = true;
+                        spanClass = 'is-variant-mut-span';
+                        const offset = i - variantPosIndex;
+                        const altChar = (offset < altStr.length) ? altStr[offset] : b;
+                        badgeHtml = `<span class="f-variant-badge mut-badge" title="Variante Mutada (${refStr} > ${altStr}): ${altChar}">${altChar}</span>`;
+                    }
+                }
+            }
+        }
 
         const baseCell = document.createElement('div');
         baseCell.className = [
             'f-base-cell',
             isVar ? 'is-variant-pos' : '',
+            spanClass,
             isIntron ? 'is-intron-base' : '',
             isDeleted ? 'is-deleted-base' : ''
-        ].join(' ').trim();
+        ].filter(Boolean).join(' ');
 
-        if (isVar) {
-            baseCell.innerHTML = `<span class="f-variant-badge mut-badge" title="Variante Mutada: ${variantRef}>${variantAlt}">${variantAlt || b}</span>`;
+        if (isVar && badgeHtml) {
+            baseCell.innerHTML = badgeHtml;
         } else {
             const regionLabel = isIntron ? ' (Intrón)' : isDeleted ? ' (Omitido)' : ` (${ch.segLabel || 'Exón'})`;
             baseCell.innerHTML = `<span class="f-base" style="color: ${color};">${b}</span>`;
@@ -1805,13 +1861,15 @@ export function renderConsequenceSimulator(container, model) {
             </div>
         `;
     } else {
+        const targetExon = variantLocation.exon || exons.find(e => variant.pos >= e.start && variant.pos <= e.end) || exons[0];
+        const exonNum = targetExon ? targetExon.exonNum : 1;
+
         card.innerHTML = `
             <div class="sim-header">
                 <h3>
                     🔬 Simulador de Marco de Lectura
-                    <span class="badge ${variantLocation.type === 'exon' ? 'badge-danger' : 'badge-neutral'}" style="font-size:0.75rem;">Variante Exónica</span>
+                    <span class="badge ${variantLocation.type === 'exon' ? 'badge-danger' : 'badge-neutral'}" style="font-size:0.75rem;">📍 Exón ${exonNum}</span>
                 </h3>
-                <p>Visualiza los nuevos aminoácidos traducidos en la fase desplazada tras la variante.</p>
             </div>
 
             <div class="sim-body">
@@ -1830,22 +1888,13 @@ export function renderConsequenceSimulator(container, model) {
                     </div>
                 </div>
 
-                <div style="margin-bottom: 14px;">
+                <div style="margin-top: 16px; margin-bottom: 16px;">
                     <button id="btnRunFrameshiftModule" class="btn-primary" style="padding: 12px 24px;">
                         ⚡ Calcular Desplazamiento del Marco y Visualizar Nuevos Aminoácidos
                     </button>
                 </div>
 
-                <div id="frameshiftResultBox" class="nmd-decision-box" style="margin-top: 14px;">
-                    <div class="nmd-title">
-                        <span>Pauta de Lectura Mutada:</span>
-                    </div>
-                    <div class="nmd-description" id="frameshiftResultText">
-                        Presiona el botón superior para calcular los codones en la nueva fase de lectura tras la variante <strong>${variant.ref} &gt; ${variant.alt}</strong>.
-                    </div>
-                </div>
-
-                <div id="frameshiftViewerContainer" style="margin-top: 18px; display: none;"></div>
+                <div id="frameshiftViewerContainer" style="margin-top: 14px; display: none;"></div>
             </div>
         `;
     }
@@ -2268,18 +2317,24 @@ export function renderConsequenceSimulator(container, model) {
     } else {
         // Scenario: Frameshift Live Recalculation (with strand -1 biological 5' -> 3' support)
         const btnRunFs = card.querySelector('#btnRunFrameshiftModule');
-        const fsBox = card.querySelector('#frameshiftResultBox');
         const fsViewer = card.querySelector('#frameshiftViewerContainer');
 
-        if (btnRunFs && fsBox) {
+        if (btnRunFs && fsViewer) {
             btnRunFs.addEventListener('click', async () => {
                 btnRunFs.disabled = true;
                 btnRunFs.innerHTML = '<span class="calc-spinner">⏳ Cargando secuencias y calculando marco...</span>';
-                if (fsViewer) fsViewer.innerHTML = '';
+                fsViewer.innerHTML = '';
 
                 const targetExon = variantLocation.exon || exons.find(e => variant.pos >= e.start && variant.pos <= e.end) || exons[0];
                 const exonEntryPhase = targetExon.phase ?? 0;
                 const isAntisense = (model.strandNumeric === -1);
+
+                const effectiveRef = isAntisense ? reverseComplement(variant.ref || 'N') : (variant.ref || 'N');
+                const effectiveAlt = isAntisense ? reverseComplement(variant.alt || 'N') : (variant.alt || 'N');
+                const refLen = Math.max(1, effectiveRef.length);
+                const deltaNt = effectiveAlt.length - effectiveRef.length;
+                const shift = (deltaNt % 3 + 3) % 3;
+                const isFrameshift = (shift !== 0);
 
                 let fullSeq = "";
                 let relVarIdx = 0;
@@ -2319,40 +2374,23 @@ export function renderConsequenceSimulator(container, model) {
                     if (!rawGenomic || rawGenomic.length === 0) rawGenomic = "N".repeat(viewStartCoord - fetchEndCoord + 1);
 
                     fullSeq = reverseComplement(rawGenomic);
-                    relVarIdx = viewStartCoord - variant.pos;
+                    relVarIdx = viewStartCoord - (variant.pos + refLen - 1);
                 }
-
-                const effectiveRef = isAntisense ? reverseComplement(variant.ref || 'N') : (variant.ref || 'N');
-                const effectiveAlt = isAntisense ? reverseComplement(variant.alt || 'N') : (variant.alt || 'N');
-                const refLen = Math.max(1, effectiveRef.length);
-                const deltaNt = effectiveAlt.length - effectiveRef.length;
-                const shift = (deltaNt % 3 + 3) % 3;
-                const isFrameshift = (shift !== 0);
 
                 // Construct WT sequence and Mutant sequence in 5' -> 3' mRNA
                 const wtSeq = fullSeq;
                 const mutSeq = fullSeq.substring(0, relVarIdx) + effectiveAlt + fullSeq.substring(relVarIdx + refLen);
 
                 // Scan mutant sequence for the first in-frame STOP codon
-                let stopFound = false;
-                let stopCodon = '';
                 let stopEndIdx = null;
-                let stopDistNt = 0;
-                let newAAs = 0;
-
                 const scanStart = startPhase === 0 ? 0 : (3 - startPhase);
                 for (let c = scanStart; c + 2 < mutSeq.length; c += 3) {
                     if (c >= relVarIdx) {
                         const codon = mutSeq.substring(c, c + 3).toUpperCase();
                         const aa = CODON_TABLE[codon];
                         if (aa === '*') {
-                            stopFound = true;
-                            stopCodon = codon;
                             stopEndIdx = c + 3;
-                            stopDistNt = stopEndIdx - relVarIdx;
                             break;
-                        } else {
-                            newAAs++;
                         }
                     }
                 }
@@ -2362,83 +2400,62 @@ export function renderConsequenceSimulator(container, model) {
                 const mutDisplaySeq = mutSeq.substring(0, displayLen);
                 const wtDisplaySeq = wtSeq.substring(0, Math.min(wtSeq.length, displayLen));
 
-                fsBox.className = `nmd-decision-box ${isFrameshift ? 'trigger-nmd' : ''}`;
-                fsBox.innerHTML = `
-                    <div class="nmd-title">
-                        <span>${isFrameshift ? '⚠️ Ruptura del Marco de Lectura (Frameshift Activo)' : '✅ Conservación del Marco de Lectura (In-Frame)'}</span>
-                    </div>
-                    <div class="nmd-description">
-                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-bottom: 12px;">
-                            <div style="background: rgba(255,255,255,0.05); padding: 8px 12px; border-radius: 4px;">
-                                <strong>1. Exón Afectado:</strong> Exón ${targetExon.exonNum} (Fase entrada: ${targetExon.phase} ➔ salida: ${targetExon.endPhase})
-                            </div>
-                            <div style="background: rgba(255,255,255,0.05); padding: 8px 12px; border-radius: 4px;">
-                                <strong>2. Locus y Cambio:</strong> Chr${chromosome}:${variant.pos.toLocaleString()} (${variant.ref} &gt; ${variant.alt}) [Δ ${deltaNt >= 0 ? `+${deltaNt}` : `${deltaNt}`} pb]
-                            </div>
-                            <div style="background: rgba(255,255,255,0.05); padding: 8px 12px; border-radius: 4px;">
-                                <strong>3. Ecuación de Marco:</strong> ${deltaNt} mod 3 = <strong>${shift} nt</strong> (${isFrameshift ? `Desplazamiento +${shift}` : 'In-Frame'})
-                            </div>
-                        </div>
-                        ${isFrameshift 
-                            ? `&bull; <strong>Consecuencia Molecular:</strong> Ruptura de la pauta de lectura respetando el marco nativo del Exón ${targetExon.exonNum}. ${stopFound ? `Se identificó el codón de parada prematuro (PTC) <strong>${stopCodon}</strong> a <strong>+${stopDistNt} pb</strong> (${newAAs} aminoácidos nuevos traducidos antes de la interrupción 🛑).` : 'Codones aberrantes downstream en la fase desplazada.'}<br>&bull; <strong>Destino Proteico:</strong> Síntesis de proteína truncada y degradación del transcripto mediada por <em>Nonsense-Mediated Decay (NMD)</em>.`
-                            : `&bull; <strong>Consecuencia Molecular:</strong> La alteración conserva la pauta de lectura de los codones posteriores (Fase intacta). ${deltaNt === 0 ? 'Sustitución de aminoácido (missense/sinónima).' : `Inserción/Deleción de ${Math.abs(deltaNt / 3)} aminoácido(s) in-frame.`}`
-                        }
+                fsViewer.style.display = 'block';
+                fsViewer.innerHTML = '';
+
+                const wrap = document.createElement('div');
+                wrap.className = 'splicing-comparison-container';
+
+                // Track 1: WT (Strictly using Step 3 exon frame & highlighting WT base in green)
+                const wtTrack = renderSynchronizedGridTrack([
+                    { seq: wtDisplaySeq, label: `Exón ${targetExon.exonNum} WT`, type: 'exon', startPhase }
+                ], {
+                    showAminoAcids: true,
+                    variantPosIndex: relVarIdx,
+                    variantRef: effectiveRef,
+                    variantAlt: effectiveAlt,
+                    isWtTrack: true,
+                    junctionIndexes: []
+                });
+
+                const wtBox = document.createElement('div');
+                wtBox.className = 'track-named-box';
+                wtBox.innerHTML = `
+                    <div class="track-box-header">
+                        <span>🧬 Secuencia WT — [ Exón <strong>${targetExon.exonNum}</strong> ]</span>
+                        <span class="phase-tag">Fase entrada: ${targetExon.phase} ➔ Fase salida: ${targetExon.endPhase}</span>
                     </div>
                 `;
+                wtBox.appendChild(wtTrack);
+                wrap.appendChild(wtBox);
 
-                if (fsViewer) {
-                    fsViewer.style.display = 'block';
-                    fsViewer.innerHTML = '';
+                // Track 2: Mutated with Frameshift included
+                const mutTrack = renderSynchronizedGridTrack([
+                    { seq: mutDisplaySeq, label: `Exón ${targetExon.exonNum} Mutado`, type: 'exon', startPhase }
+                ], {
+                    showAminoAcids: true,
+                    isFrameshift,
+                    frameshiftStartIndex: relVarIdx,
+                    variantPosIndex: relVarIdx,
+                    variantRef: effectiveRef,
+                    variantAlt: effectiveAlt,
+                    isWtTrack: false,
+                    stopAtCodonStop: isFrameshift,
+                    junctionIndexes: []
+                });
 
-                    const wrap = document.createElement('div');
-                    wrap.className = 'splicing-comparison-container';
+                const mutBox = document.createElement('div');
+                mutBox.className = 'track-named-box is-cryptic-box';
+                mutBox.innerHTML = `
+                    <div class="track-box-header">
+                        <span>⚡ Secuencia con Frameshift incluido — [ Exón <strong>${targetExon.exonNum}</strong> ] (${variant.ref} &gt; ${variant.alt})</span>
+                        <span class="badge ${isFrameshift ? 'badge-danger' : 'badge-neutral'}">${isFrameshift ? '⚠️ Frameshift Activo' : '✅ In-Frame'}</span>
+                    </div>
+                `;
+                mutBox.appendChild(mutTrack);
+                wrap.appendChild(mutBox);
 
-                    // Track 1: WT (Strictly using Step 3 exon frame)
-                    const wtTrack = renderSynchronizedGridTrack([
-                        { seq: wtDisplaySeq, label: `Exón ${targetExon.exonNum} WT`, type: 'exon', startPhase }
-                    ], {
-                        showAminoAcids: true,
-                        junctionIndexes: [relVarIdx]
-                    });
-
-                    const wtBox = document.createElement('div');
-                    wtBox.className = 'track-named-box';
-                    wtBox.innerHTML = `
-                        <div class="track-box-header">
-                            <span>🧬 Secuencia Salvaje (WT) — Exón <strong>${targetExon.exonNum}</strong></span>
-                            <span class="phase-tag">Fase entrada: ${targetExon.phase} ➔ Fase salida: ${targetExon.endPhase}</span>
-                        </div>
-                    `;
-                    wtBox.appendChild(wtTrack);
-                    wrap.appendChild(wtBox);
-
-                    // Track 2: Mutated
-                    const mutTrack = renderSynchronizedGridTrack([
-                        { seq: mutDisplaySeq, label: `Exón ${targetExon.exonNum} Mutado`, type: 'exon', startPhase }
-                    ], {
-                        showAminoAcids: true,
-                        junctionIndexes: [relVarIdx],
-                        isFrameshift,
-                        frameshiftStartIndex: relVarIdx,
-                        variantPosIndex: relVarIdx,
-                        variantRef: effectiveRef,
-                        variantAlt: effectiveAlt,
-                        stopAtCodonStop: isFrameshift
-                    });
-
-                    const mutBox = document.createElement('div');
-                    mutBox.className = 'track-named-box is-cryptic-box';
-                    mutBox.innerHTML = `
-                        <div class="track-box-header">
-                            <span>⚡ Secuencia Reconstruida — Exón <strong>${targetExon.exonNum}</strong> (${variant.ref} &gt; ${variant.alt})</span>
-                            <span class="badge ${isFrameshift ? 'badge-danger' : 'badge-neutral'}">${isFrameshift ? '⚠️ Frameshift Activo' : '✅ In-Frame'}</span>
-                        </div>
-                    `;
-                    mutBox.appendChild(mutTrack);
-                    wrap.appendChild(mutBox);
-
-                    fsViewer.appendChild(wrap);
-                }
+                fsViewer.appendChild(wrap);
 
                 btnRunFs.disabled = false;
                 btnRunFs.innerHTML = '⚡ Calcular Desplazamiento del Marco y Visualizar Nuevos Aminoácidos';
